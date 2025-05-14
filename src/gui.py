@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 import pandas as pd
 import threading
-from sqlalchemy import func, select, MetaData, Table
+from sqlalchemy import func, select, MetaData, Table, inspect
 from main import make_engine
 
 from tkinter import *
@@ -160,9 +160,35 @@ class ProcessFrame(Frame):
                 if isinstance(self, ExcelFileFrame):
                     total_rows = len(pd.read_excel(args['input_path'], args['input_sheet']))
                 else:
+                    # Проверяем доступность схемы перед созданием таблицы
                     engine = make_engine(**args)
-                    metadata = MetaData()
-                    table = Table(args['input_table_name'], metadata, autoload_with=engine)
+                    schema = args.get('schema')
+                    
+                    # Проверка схемы
+                    inspector = inspect(engine)
+                    schemas = inspector.get_schema_names()
+                    print(f"Доступные схемы в БД: {schemas}")
+                    
+                    if schema and schema not in schemas:
+                        raise Exception(f"Схема '{schema}' не найдена в базе данных. Доступные схемы: {schemas}")
+                    
+                    # Используем схему при создании метаданных
+                    metadata = MetaData(schema=schema)
+                    input_table_name = args.get('input_table_name')
+                    
+                    # Проверяем существование таблицы
+                    tables = inspector.get_table_names(schema=schema)
+                    if input_table_name.lower() not in [t.lower() for t in tables]:
+                        raise Exception(f"Таблица '{input_table_name}' не найдена в схеме '{schema}'. Доступные таблицы: {tables}")
+                    
+                    # Находим точное имя таблицы с учетом регистра
+                    actual_table_name = None
+                    for table in tables:
+                        if table.lower() == input_table_name.lower():
+                            actual_table_name = table
+                            break
+                    
+                    table = Table(actual_table_name, metadata, autoload_with=engine)
                     with engine.connect() as conn:
                         total_rows = conn.execute(select(func.count()).select_from(table)).scalar()
                 
@@ -193,6 +219,8 @@ class ProcessFrame(Frame):
                         self.after_cancel(self._update_id)
                     self._update_id = self.after(100, lambda: self._update_progress(current, total_rows))
             
+            # Добавляем exceptions_manager в аргументы
+            args['exceptions_manager'] = self.master.master.exceptions_manager
             stats = self._process_handler(**args, progress_callback=progress_callback)
             self.after(0, lambda: self._update_stats(stats))
             
@@ -226,6 +254,8 @@ class ProcessFrame(Frame):
         else:
             self.export_errors_button.pack_forget()
         messagebox.showinfo('Операция завершена!', 'Выполнение операции завершено. Подробности отображены в нижней части интерфейса.')
+        if hasattr(self.master.master, 'exceptions_manager'):
+            self.master.master.exceptions_manager._load_exceptions()
 
     def _create_progress_section(self):
         progress_frame = Frame(self)
@@ -248,6 +278,8 @@ class ProcessFrame(Frame):
                 for addr, error in self.stats.failed_addresses:
                     f.write(f'"{addr}","{error}"\n')
             messagebox.showinfo("Экспорт завершен", f"Ошибки сохранены в файл: {output_path}")
+            if hasattr(self.master.master, 'exceptions_manager'):
+                self.master.master.exceptions_manager._load_exceptions()
 
 
 class ExcelFileFrame(ProcessFrame):
@@ -406,6 +438,13 @@ class DataBaseFrame(ProcessFrame):
         """Проверяет параметры таблиц."""
         errors = []
         
+        # Проверка схемы БД
+        schema = self.schema_entry.get()
+        if not schema:
+            errors.append("Не указана схема БД")
+        elif not re.match(r'^[a-zA-Z0-9_]+$', schema):
+            errors.append("Некорректный формат имени схемы БД")
+        
         # Проверка входной таблицы
         input_table = self.input_table_name_entry.get()
         if not input_table:
@@ -434,26 +473,42 @@ class DataBaseFrame(ProcessFrame):
                     self.port_entry.get(),
                     self.user_entry.get(),
                     self.password_entry.get(),
-                    self.db_name_entry.get()
+                    self.db_name_entry.get(),
+                    self.schema_entry.get()
                 ]):
                     args = self._get_args()
                     engine = self._make_engine(**args)
-                    metadata = MetaData()
+                    
+                    # Сначала проверим наличие схемы в БД
+                    try:
+                        inspector = inspect(engine)
+                        schemas = inspector.get_schema_names()
+                        print(f"Доступные схемы в БД: {schemas}")
+                        
+                        if schema not in schemas:
+                            errors.append(f"Схема '{schema}' не найдена в базе данных. Доступные схемы: {schemas}")
+                            return len(errors) == 0, errors
+                    except Exception as e:
+                        errors.append(f"Ошибка при проверке схемы: {str(e)}")
+                        return len(errors) == 0, errors
+                    
+                    # Если схема существует, проверяем таблицы
+                    metadata = MetaData(schema=schema)
                     
                     # Проверяем существование входной таблицы
                     try:
                         input_table_obj = Table(input_table, metadata, autoload_with=engine)
                         # Проверяем существование поля адреса
                         if address_field not in input_table_obj.columns:
-                            errors.append(f"Поле '{address_field}' не найдено в таблице '{input_table}'")
+                            errors.append(f"Поле '{address_field}' не найдено в таблице '{schema}.{input_table}'")
                     except Exception as e:
-                        errors.append(f"Таблица '{input_table}' не найдена в базе данных")
+                        errors.append(f"Таблица '{schema}.{input_table}' не найдена в базе данных. Ошибка: {str(e)}")
                         return len(errors) == 0, errors
                     
                     # Проверяем существование выходной таблицы
                     try:
                         Table(output_table, metadata, autoload_with=engine)
-                        errors.append(f"Таблица '{output_table}' уже существует в базе данных")
+                        errors.append(f"Таблица '{schema}.{output_table}' уже существует в базе данных")
                     except Exception:
                         pass
             except Exception as e:
@@ -522,10 +577,17 @@ class DataBaseFrame(ProcessFrame):
         connection_frame.pack(fill=X, padx=5, pady=5, anchor=N)
 
         self.user_entry = make_field_frame(connection_frame, "Пользователь:")
+        self.user_entry.insert(0, 'postgres')
         self.password_entry = make_field_frame(connection_frame, "Пароль:")
+        self.password_entry.insert(0, '1234')
         self.host_entry = make_field_frame(connection_frame, "Хост:")
+        self.host_entry.insert(0, 'localhost')
         self.port_entry = make_field_frame(connection_frame, "Порт:")
+        self.port_entry.insert(0, '5435')
         self.db_name_entry = make_field_frame(connection_frame, "Название БД:")
+        self.db_name_entry.insert(0, 'postgres')
+        self.schema_entry = make_field_frame(connection_frame, "Схема БД:")
+        self.schema_entry.insert(0, 'public')
 
         # Данные о входной таблице в БД
         input_table_frame = LabelFrame(self, text='Данные о входной таблице')
@@ -572,6 +634,7 @@ class DataBaseFrame(ProcessFrame):
             'host': self.host_entry.get(),
             'port': self.port_entry.get(),
             'db_name': self.db_name_entry.get(),
+            'schema': self.schema_entry.get(),
             'input_table_name': self.input_table_name_entry.get(),
             'id_column': self.id_entry.get().strip() if self.id_entry.get().strip() != '' else None,
             'address_column': self.address_entry.get(),
@@ -606,6 +669,345 @@ class TextLogger:
     def flush(self):
         pass
 
+class ExceptionsFrame(Frame):
+    """Фрейм для работы с файлом исключений адресов."""
+    
+    def __init__(self, parent, logger):
+        super().__init__(parent)
+        self.logger = logger
+        self.exceptions_file = "Exceptions.xlsx"
+        self.exceptions = {}  # {неправильный_адрес: (правильный_адрес, ключ)}
+        self.initUI()
+        
+    def initUI(self):
+        """Инициализация интерфейса."""
+        self.pack(fill=BOTH, expand=True)
+        
+        # Создаем таблицу для отображения исключений
+        self.tree = ttk.Treeview(self, columns=("address", "correct_address", "key"), show="headings")
+        self.tree.heading("address", text="Неправильный адрес")
+        self.tree.heading("correct_address", text="Правильный адрес")
+        self.tree.heading("key", text="Ключ")
+        self.tree.column("address", width=300)
+        self.tree.column("correct_address", width=300)
+        self.tree.column("key", width=100)
+        
+        # Добавляем прокрутку
+        scrollbar = Scrollbar(self, orient=VERTICAL, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scrollbar.set)
+        
+        scrollbar.pack(side=RIGHT, fill=Y)
+        self.tree.pack(fill=BOTH, expand=True, padx=5, pady=5)
+        
+        # Кнопки действий
+        actions_frame = Frame(self)
+        actions_frame.pack(fill=X, padx=5, pady=5)
+        
+        Button(actions_frame, text="Добавить", command=self._add_exception).pack(side=LEFT, padx=5)
+        Button(actions_frame, text="Редактировать", command=self._edit_exception).pack(side=LEFT, padx=5)
+        Button(actions_frame, text="Удалить", command=self._delete_exception).pack(side=LEFT, padx=5)
+        Button(actions_frame, text="Сохранить", command=self._save_exceptions).pack(side=LEFT, padx=5)
+        
+        # Загружаем данные
+        self._load_exceptions()
+        
+    def _load_exceptions(self):
+        """Загружает исключения из файла."""
+        try:
+            if os.path.exists(self.exceptions_file):
+                print(f"Загрузка исключений из файла: {self.exceptions_file}")
+                df = pd.read_excel(self.exceptions_file)
+                print(f"Содержимое файла исключений:\n{df}")
+                
+                # Очищаем таблицу
+                for item in self.tree.get_children():
+                    self.tree.delete(item)
+                
+                # Загружаем данные в таблицу и словарь
+                self.exceptions = {}
+                for _, row in df.iterrows():
+                    address = row['address']
+                    correct_address = row['correct_address']
+                    key = row['key']
+                    self.exceptions[address] = (correct_address, key)
+                    self.tree.insert("", END, values=(address, correct_address, key))
+                
+                print(f"Загруженные исключения: {self.exceptions}")
+            else:
+                print(f"Файл исключений не найден: {self.exceptions_file}")
+        except Exception as e:
+            print(f"Ошибка при загрузке файла исключений: {str(e)}")
+            
+    def _save_exceptions(self):
+        """Сохраняет исключения в файл."""
+        try:
+            # Обновляем словарь исключений из таблицы
+            self.exceptions = {}
+            for item in self.tree.get_children():
+                values = self.tree.item(item)['values']
+                address = values[0]
+                correct_address = values[1]
+                key = values[2]
+                self.exceptions[address] = (correct_address, key)
+            
+            # Создаем DataFrame и сохраняем в файл
+            data = []
+            for address, (correct_address, key) in self.exceptions.items():
+                data.append({
+                    'address': address,
+                    'correct_address': correct_address,
+                    'key': key
+                })
+            
+            df = pd.DataFrame(data)
+            df.to_excel(self.exceptions_file, index=False)
+            messagebox.showinfo("Успех!", "Файл исключений успешно сохранен")
+            if hasattr(self.master.master, 'exceptions_manager'):
+                self.master.master.exceptions_manager._load_exceptions()
+        except Exception as e:
+            messagebox.showerror("Ошибка!", f"Не удалось сохранить файл исключений: {str(e)}")
+            
+    def _add_exception(self):
+        """Добавляет новое исключение."""
+        dialog = ExceptionDialog(self, "Добавить исключение")
+        if dialog.result:
+            address, correct_address, key = dialog.result
+            self.exceptions[address] = (correct_address, key)
+            self.tree.insert("", END, values=dialog.result)
+            
+    def _edit_exception(self):
+        """Редактирует выбранное исключение."""
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("Предупреждение", "Выберите исключение для редактирования")
+            return
+            
+        item = selected[0]
+        values = self.tree.item(item)['values']
+        old_address = values[0]
+        
+        dialog = ExceptionDialog(self, "Редактировать исключение", values)
+        if dialog.result:
+            new_address, new_correct_address, new_key = dialog.result
+            
+            # Удаляем старое исключение и добавляем новое
+            if old_address in self.exceptions:
+                del self.exceptions[old_address]
+            self.exceptions[new_address] = (new_correct_address, new_key)
+            
+            self.tree.item(item, values=dialog.result)
+            
+    def _delete_exception(self):
+        """Удаляет выбранное исключение."""
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("Предупреждение", "Выберите исключение для удаления")
+            return
+            
+        if messagebox.askyesno("Подтверждение", "Удалить выбранное исключение?"):
+            item = selected[0]
+            values = self.tree.item(item)['values']
+            address = values[0]
+            
+            # Удаляем из словаря и таблицы
+            if address in self.exceptions:
+                del self.exceptions[address]
+            self.tree.delete(item)
+
+
+class ExceptionDialog(Toplevel):
+    """Диалог для добавления/редактирования исключения."""
+    
+    def __init__(self, parent, title, values=None):
+        super().__init__(parent)
+        self.title(title)
+        self.result = None
+        
+        # Создаем поля ввода
+        frame = Frame(self)
+        frame.pack(fill=X, padx=5, pady=5)
+        
+        Label(frame, text="Неправильный адрес:").pack(side=LEFT, padx=5)
+        self.address_entry = Entry(frame, width=50)
+        self.address_entry.pack(side=LEFT, padx=5)
+        
+        frame2 = Frame(self)
+        frame2.pack(fill=X, padx=5, pady=5)
+        
+        Label(frame2, text="Правильный адрес:").pack(side=LEFT, padx=5)
+        self.correct_address_entry = Entry(frame2, width=50)
+        self.correct_address_entry.pack(side=LEFT, padx=5)
+        
+        frame3 = Frame(self)
+        frame3.pack(fill=X, padx=5, pady=5)
+        
+        Label(frame3, text="Ключ:").pack(side=LEFT, padx=5)
+        self.key_entry = Entry(frame3, width=10)
+        self.key_entry.pack(side=LEFT, padx=5)
+        
+        # Заполняем поля, если редактируем
+        if values:
+            self.address_entry.insert(0, values[0])
+            self.correct_address_entry.insert(0, values[1])
+            self.key_entry.insert(0, values[2])
+        
+        # Кнопки
+        buttons_frame = Frame(self)
+        buttons_frame.pack(fill=X, padx=5, pady=5)
+        
+        Button(buttons_frame, text="OK", command=self._on_ok).pack(side=LEFT, padx=5)
+        Button(buttons_frame, text="Отмена", command=self._on_cancel).pack(side=LEFT, padx=5)
+        
+        # Центрируем окно
+        self.update_idletasks()
+        width = self.winfo_width()
+        height = self.winfo_height()
+        x = (self.winfo_screenwidth() // 2) - (width // 2)
+        y = (self.winfo_screenheight() // 2) - (height // 2)
+        self.geometry(f'{width}x{height}+{x}+{y}')
+        
+        # Делаем окно модальным
+        self.transient(parent)
+        self.grab_set()
+        self.wait_window()
+        
+    def _on_ok(self):
+        """Обработчик нажатия кнопки OK."""
+        address = self.address_entry.get().strip()
+        correct_address = self.correct_address_entry.get().strip()
+        key = self.key_entry.get().strip()
+        
+        if not address:
+            messagebox.showwarning("Предупреждение", "Введите неправильный адрес")
+            return
+            
+        if not correct_address:
+            messagebox.showwarning("Предупреждение", "Введите правильный адрес")
+            return
+            
+        if not key:
+            messagebox.showwarning("Предупреждение", "Введите ключ")
+            return
+            
+        try:
+            key = int(key)
+        except ValueError:
+            messagebox.showwarning("Предупреждение", "Ключ должен быть числом")
+            return
+            
+        self.result = (address, correct_address, key)
+        self.destroy()
+        
+    def _on_cancel(self):
+        """Обработчик нажатия кнопки Отмена."""
+        self.destroy()
+
+class ExceptionsManager:
+    """Менеджер для работы с исключениями адресов."""
+    
+    def __init__(self, exceptions_file="Exceptions.xlsx"):
+        self.exceptions_file = exceptions_file
+        self.exceptions = {}  # {неправильный_адрес: (правильный_адрес, ключ)}
+        self._load_exceptions()
+        
+    def _normalize_address(self, address: str) -> str:
+        """Нормализует адрес для сравнения.
+        
+        Args:
+            address (str): Исходный адрес.
+            
+        Returns:
+            str: Нормализованный адрес.
+        """
+        if not address:
+            return ""
+        # Приводим к верхнему регистру
+        address = address.upper()
+        # Заменяем различные варианты написания на стандартные
+        replacements = {
+            'УЛИЦА': 'УЛ.',
+            'УЛ ': 'УЛ.',
+            'УЛ.': 'УЛ.',
+            'ПРОСПЕКТ': 'ПР-КТ',
+            'ПРОСП': 'ПР-КТ',
+            'ПР-Т': 'ПР-КТ',
+            'ПРОЕЗД': 'ПР-Д',
+            'ПР.': 'ПР-Д',
+            'БУЛЬВАР': 'Б-Р',
+            'БУЛ': 'Б-Р',
+            'ПЛОЩАДЬ': 'ПЛ.',
+            'ПЛ ': 'ПЛ.',
+        }
+        for old, new in replacements.items():
+            address = address.replace(old, new)
+        # Убираем лишние пробелы
+        address = ' '.join(address.split())
+        return address
+        
+    def _load_exceptions(self):
+        """Загружает исключения из файла."""
+        try:
+            if os.path.exists(self.exceptions_file):
+                print(f"Загрузка исключений из файла: {self.exceptions_file}")
+                df = pd.read_excel(self.exceptions_file)
+                print(f"Содержимое файла исключений:\n{df}")
+                
+                # Загружаем данные в словарь с нормализацией адресов
+                self.exceptions = {}
+                for _, row in df.iterrows():
+                    address = self._normalize_address(row['address'])
+                    correct_address = row['correct_address']
+                    key = row['key']
+                    self.exceptions[address] = (correct_address, key)
+                
+                print(f"Загруженные исключения: {self.exceptions}")
+            else:
+                print(f"Файл исключений не найден: {self.exceptions_file}")
+        except Exception as e:
+            print(f"Ошибка при загрузке файла исключений: {str(e)}")
+            
+    def get_key(self, address: str) -> tuple[int | None, str]:
+        """Получает ключ для адреса из исключений.
+        
+        Args:
+            address (str): Адрес для поиска.
+            
+        Returns:
+            tuple[int | None, str]: (ключ, сообщение)
+                - Если адрес найден в исключениях, возвращает его ключ и пустое сообщение
+                - Если адрес не найден, возвращает None и сообщение "адрес не найден"
+                - Если адрес найден в исключениях с ключом None, возвращает None и сообщение "адрес не существует"
+        """
+        print(f"Поиск адреса в исключениях: {address}")  # Отладочная информация
+        print(f"Доступные исключения: {self.exceptions}")  # Отладочная информация
+        
+        normalized_address = self._normalize_address(address)
+        print(f"Нормализованный адрес: {normalized_address}")  # Отладочная информация
+        
+        if normalized_address in self.exceptions:
+            correct_address, key = self.exceptions[normalized_address]
+            print(f"Адрес найден в исключениях: correct_address={correct_address}, key={key}")  # Отладочная информация
+            if key is None:
+                return None, "адрес не существует"
+            return key, ""
+        print(f"Адрес не найден в исключениях")  # Отладочная информация
+        return None, "адрес не найден"
+        
+    def get_correct_address(self, address: str) -> str | None:
+        """Получает правильный адрес для адреса из исключений.
+        
+        Args:
+            address (str): Адрес для поиска.
+            
+        Returns:
+            str | None: Правильный адрес или None, если адрес не найден в исключениях
+        """
+        normalized_address = self._normalize_address(address)
+        if normalized_address in self.exceptions:
+            correct_address, _ = self.exceptions[normalized_address]
+            return correct_address
+        return None
+
 class MainWindow(Tk):
     """ Главное окно программы. """
 
@@ -617,6 +1019,7 @@ class MainWindow(Tk):
         self.process_db = process_db
         self.make_engine = make_engine
         self.check_connection_handler = check_connection_handler
+        self.exceptions_manager = ExceptionsManager()
         
         self.title("Обработка адресов")
         self.geometry("800x600")
@@ -629,11 +1032,13 @@ class MainWindow(Tk):
         self.excel_frame = ExcelFileFrame(self.notebook, self.process_excel, self.logger)
         self.db_frame = DataBaseFrame(self.notebook, self.process_db, self.make_engine, self.logger, self.check_connection_handler)
         self.errors_frame = ErrorsFrame(self.notebook, self.logger)
+        self.exceptions_frame = ExceptionsFrame(self.notebook, self.logger)
         
         # Добавляем вкладки
         self.notebook.add(self.excel_frame, text="Excel")
         self.notebook.add(self.db_frame, text="База данных")
         self.notebook.add(self.errors_frame, text="Ошибки")
+        self.notebook.add(self.exceptions_frame, text="Исключения")
         
         # Создаем фрейм для логов
         self.log_frame = Frame(self)

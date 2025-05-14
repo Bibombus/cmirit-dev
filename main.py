@@ -4,13 +4,18 @@ import sys
 import os
 from typing import Any
 from enum import Enum
+import logging
+import time
+from os import path
 
 import pandas as pd
-from sqlalchemy import create_engine, select, MetaData, Table, text
+from sqlalchemy import create_engine, select, MetaData, Table, text, inspect
 
+from src import AbbrsInfo
 from src.AddresInfo import Address
+from src.AddresInfo.address import StreetType
 from src.Linker import Linker
-from src.OutputWorker import SingleTableExcelOutputWorker, AddressDTO, LoggersCollection
+from src.OutputWorker import SingleTableExcelOutputWorker, AddressDTO, LoggersCollection, ImprovedDatabaseOutputWorker
 from src.OutputWorker.outputWorker import DatabaseOutputWorker
 from src.args import make_args_parser
 from src import gui
@@ -79,25 +84,66 @@ def init_linker():
         raise e
 
 
-def process(addres: str) -> tuple[Address, Any | None]:
-    """ Обработка сырого адреса и получение его ключа. Сама суть - распознали адрес, получили ключ, взяли адрес из выгрузки по ключу, отдали адрес и ключ.
+def process(addres: str, exceptions_manager=None) -> tuple[Address, Any | None, str]:
+    """ Обработка сырого адреса и получение его ключа.
 
     Args:
         addres (str): Сырой адрес.
+        exceptions_manager (ExceptionsManager, optional): Менеджер исключений.
 
     Returns:
-        tuple[Address, Any | None]: Пара адрес и ключ
+        tuple[Address, Any | None, str]: (адрес, ключ, сообщение)
     """
-
     raw = str(addres) if str(addres) !='nan' else None
-    addr = Address.fromStr(raw)
-    key = linker.link(addr, require_flat_check=True)
-    addr1 = linker.getvalue(key)
-    addr1.flat = addr.flat
-    return addr1, key
+    print(f"Обработка адреса: {raw}")  # Отладочная информация
+    
+    # Сначала проверяем в исключениях
+    if exceptions_manager:
+        key, message = exceptions_manager.get_key(raw)
+        print(f"Проверка в исключениях: key={key}, message={message}")  # Отладочная информация
+        if key is not None:
+            # Если адрес найден в исключениях, получаем правильный адрес
+            correct_address = exceptions_manager.get_correct_address(raw)
+            print(f"Правильный адрес из исключений: {correct_address}")  # Отладочная информация
+            if correct_address:
+                try:
+                    # Создаем новый адрес из правильного варианта
+                    addr = Address.fromStr(correct_address)
+                    print(f"Создан адрес из правильного варианта: {addr}")  # Отладочная информация
+                    
+                    # Сохраняем номер квартиры из исходного адреса, если возможно
+                    try:
+                        original_addr = Address.fromStr(raw)
+                        addr.flat = original_addr.flat
+                    except Exception as e:
+                        print(f"Не удалось получить квартиру из исходного адреса: {str(e)}")  # Отладочная информация
+                        # Продолжаем работу без установки квартиры
+                    
+                    print(f"Итоговый адрес: {addr}")  # Отладочная информация
+                    return addr, key, ""
+                except Exception as e:
+                    print(f"Ошибка при обработке правильного адреса: {str(e)}")  # Отладочная информация
+                    return None, None, f"Ошибка при обработке правильного адреса: {str(e)}"
+        elif message == "адрес не существует":
+            # Если адрес помечен как несуществующий
+            return None, None, message
+    
+    # Если адрес не найден в исключениях или произошла ошибка, ищем в справочнике
+    try:
+        addr = Address.fromStr(raw)
+        print(f"Создан адрес из справочника: {addr}")  # Отладочная информация
+        key = linker.link(addr, require_flat_check=True)
+        addr1 = linker.getvalue(key)
+        addr1.flat = addr.flat
+        print(f"Итоговый адрес из справочника: {addr1}")  # Отладочная информация
+        return addr1, key, ""
+    except Exception as e:
+        print(f"Ошибка при обработке адреса из справочника: {str(e)}")  # Отладочная информация
+        # Если адрес не найден ни в справочнике, ни в исключениях
+        return None, None, "адрес не найден"
 
 
-def process_excel(input_path: str, input_sheet: str, address_name: str, output_path: str, id_name: str | None = None, error_mode: ErrorHandlingMode = ErrorHandlingMode.STOP, progress_callback=None) -> ProcessingStats:
+def process_excel(input_path: str, input_sheet: str, address_name: str, output_path: str, id_name: str | None = None, error_mode: ErrorHandlingMode = ErrorHandlingMode.STOP, progress_callback=None, exceptions_manager=None) -> ProcessingStats:
     stats = ProcessingStats()
     
     try:
@@ -130,6 +176,7 @@ def process_excel(input_path: str, input_sheet: str, address_name: str, output_p
                     'address': None,
                     'key': None,
                     'raw': None,
+                    'note': None
                 }
 
                 if id_name is not None:
@@ -137,7 +184,9 @@ def process_excel(input_path: str, input_sheet: str, address_name: str, output_p
                 
                 data['raw'] = row[address_name]
                 try:
-                    data['address'], data['key'] = process(data['raw'])
+                    data['address'], data['key'], message = process(data['raw'], exceptions_manager)
+                    if message:
+                        data['note'] = message
                     stats.add_success()
                     yield AddressDTO(**data)
                 except Exception as e:
@@ -168,7 +217,7 @@ def make_engine(dbms: str, user: str, password: str, host: str, port: str, db_na
         return engine
 
 
-def process_db(dbms: str, user: str, password: str, host: str, port: str, db_name: str, input_table_name: str, id_column: str, address_column: str, output_table_name: str, error_mode: ErrorHandlingMode = ErrorHandlingMode.STOP, progress_callback=None) -> ProcessingStats:
+def process_db(dbms: str, user: str, password: str, host: str, port: str, db_name: str, schema: str, input_table_name: str, id_column: str, address_column: str, output_table_name: str, error_mode: ErrorHandlingMode = ErrorHandlingMode.STOP, progress_callback=None, exceptions_manager=None) -> ProcessingStats:
     stats = ProcessingStats()
     
     try:
@@ -176,8 +225,30 @@ def process_db(dbms: str, user: str, password: str, host: str, port: str, db_nam
     except Exception as e:
         raise Exception(f'Ошибка при установлении подключения к БД. Подробнее: {e}')
     
-    metadata = MetaData()
-    table = Table(input_table_name, metadata, autoload_with=engine)
+    # Проверка схемы
+    inspector = inspect(engine)
+    schemas = inspector.get_schema_names()
+    print(f"Доступные схемы в БД: {schemas}")
+    
+    if schema not in schemas:
+        raise Exception(f"Схема '{schema}' не найдена в базе данных. Доступные схемы: {schemas}")
+    
+    # Проверка таблицы с учетом регистра
+    tables = inspector.get_table_names(schema=schema)
+    print(f"Доступные таблицы в схеме {schema}: {tables}")
+    
+    if input_table_name.lower() not in [t.lower() for t in tables]:
+        raise Exception(f"Таблица '{input_table_name}' не найдена в схеме '{schema}'. Доступные таблицы: {tables}")
+    
+    # Находим точное имя таблицы с учетом регистра
+    actual_table_name = None
+    for table in tables:
+        if table.lower() == input_table_name.lower():
+            actual_table_name = table
+            break
+    
+    metadata = MetaData(schema=schema)
+    table = Table(actual_table_name, metadata, autoload_with=engine)
 
     def generator():
         try:
@@ -190,7 +261,7 @@ def process_db(dbms: str, user: str, password: str, host: str, port: str, db_nam
                 # Используем серверный курсор для потоковой обработки
                 result = conn.execution_options(stream_results=True).execute(select(*columns))
                 total_processed = 0
-                batch_size = 100  # Размер пакета для обновления прогресса
+                batch_size = 100
                 
                 for row in result:
                     total_processed += 1
@@ -199,18 +270,35 @@ def process_db(dbms: str, user: str, password: str, host: str, port: str, db_nam
                         
                     try:
                         if id_column is not None:
-                            id_, address = row
-                            addr, key = process(address)
-                            data = {id_column: id_}
-                            stats.add_success()
-                            yield AddressDTO(address, addr, key, **data)
+                            # Если есть колонка ID
+                            id_val, address = row
+                            print(f"Обработка строки с ID={id_val}, адрес={address}")
+                            addr, key, message = process(address, exceptions_manager)
+                            # Создаем словарь с параметрами для AddressDTO
+                            # Важно: используем именно id_column как имя параметра
+                            data = {}
+                            data[id_column] = id_val  # Явно указываем имя колонки как ключ
+                            if message:
+                                data['note'] = message
+                            print(f"Данные для AddressDTO: {data}")
+                            dto = AddressDTO(address, addr, key, **data)
+                            print(f"Созданный объект DTO: {dto.__dict__}")
                         else:
+                            # Если колонки ID нет
                             address = row[0]
-                            addr, key = process(address)
-                            stats.add_success()
-                            yield AddressDTO(address, addr, key)
+                            print(f"Обработка строки с адресом: {address}")
+                            addr, key, message = process(address, exceptions_manager)
+                            data = {}
+                            if message:
+                                data['note'] = message
+                            dto = AddressDTO(address, addr, key, **data)
+                        
+                        print(f"Обработка записи: raw={dto.raw}, key={dto.key}")
+                        stats.add_success()
+                        yield dto
                     except Exception as ex:
                         stats.add_failure(address, ex)
+                        print(f"Ошибка при обработке строки: {ex}")
                         if error_mode == ErrorHandlingMode.STOP:
                             raise ex
                         continue
@@ -220,20 +308,48 @@ def process_db(dbms: str, user: str, password: str, host: str, port: str, db_nam
             raise e
             
     try:
-        outputWorker = DatabaseOutputWorker(engine, output_table_name, id_column, logger)
+        print(f"Создание ImprovedDatabaseOutputWorker с параметрами:")
+        print(f"- input_table_name: {actual_table_name} (исходное: {input_table_name})")
+        print(f"- output_table_name: {output_table_name}")
+        print(f"- schema: {schema}")
+        print(f"- id_column: {id_column}")
+        
+        # Используем улучшенную версию класса для записи в базу данных
+        outputWorker = ImprovedDatabaseOutputWorker(
+            engine=engine,
+            input_table_name=actual_table_name,  # Используем актуальное имя таблицы
+            output_table_name=output_table_name,
+            schema=schema,
+            id_column=id_column,
+            logger=logger
+        )
         outputWorker.save(generator())
+        
+        # Если по какой-то причине ImprovedDatabaseOutputWorker не сработал, можно раскомментировать старый вариант:
+        # outputWorker = DatabaseOutputWorker(engine, input_table_name, output_table_name, schema, id_column, logger)
+        # outputWorker.save(generator())
     except Exception as e:
         logger.write(f'Ошибка сохранения данных в БД. Подробнее :{e}')
         raise e
     
     return stats
 
-def check_connection(dbms: str, user: str, password: str, host: str, port: str, db_name: str, **kwargs):
-    """Проверяет подключение к базе данных."""
+def check_connection(dbms: str, user: str, password: str, host: str, port: str, db_name: str, schema: str = None, **kwargs):
+    """Проверяет подключение к базе данных и наличие указанной схемы."""
     try:
         engine = make_engine(dbms, user, password, host, port, db_name)
         with engine.connect() as conn:
+            # Проверяем базовое подключение
             conn.execute(text("SELECT 1"))
+            
+            # Проверяем схему, если она указана
+            if schema and schema.lower() != 'public':
+                inspector = inspect(engine)
+                schemas = inspector.get_schema_names()
+                print(f"Доступные схемы в БД: {schemas}")
+                
+                if schema not in schemas:
+                    raise Exception(f"Схема '{schema}' не найдена в базе данных. Доступные схемы: {schemas}")
     except Exception as e:
         raise Exception(f"Не удалось подключиться к базе данных: {str(e)}")
 

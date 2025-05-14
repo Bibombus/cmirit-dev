@@ -4,3 +4,14 @@
 """
 
 from .outputWorker import *
+from .improved_worker import ImprovedDatabaseOutputWorker
+
+__all__ = [
+    "OutputWorker",
+    "SingleTableExcelOutputWorker",
+    "AddressDTO",
+    "LoggersCollection",
+    "GUILogger",
+    "DatabaseOutputWorker",
+    "ImprovedDatabaseOutputWorker"
+]

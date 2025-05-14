@@ -1,7 +1,8 @@
 # Test data
 Data/
 results/
-*xlsx
+input.xlsx
+output.xlsx
 
 # virtual environment
 venv/
