@@ -6,8 +6,9 @@
 from abc import ABC, abstractmethod
 from typing import Any, Iterable
 import sys
-from tkinter import Listbox
+from tkinter import Listbox, messagebox
 import time
+import traceback
 
 import pandas as pd
 from sqlalchemy import Engine, Integer, create_engine, MetaData, Table, Column, String, text, select
@@ -36,6 +37,11 @@ class ImprovedDatabaseOutputWorker(OutputWorker):
         self.output_table_name = output_table_name
         self.schema = schema
         self.id_column = id_column
+        print(f"Инициализация ImprovedDatabaseOutputWorker:")
+        print(f"  - ID колонка: {self.id_column}")
+        print(f"  - Входная таблица: {self.input_table_name}")
+        print(f"  - Выходная таблица: {self.output_table_name}")
+        print(f"  - Схема: {self.schema}")
 
     def save(self, addresses):
         """Сохраняет данные в базу данных и обновляет ключи во входной таблице.
@@ -61,49 +67,90 @@ class ImprovedDatabaseOutputWorker(OutputWorker):
             print(f"Выходная таблица: {self.output_table_name}")
             print(f"ID колонка: {self.id_column if self.id_column else 'Не указана'}")
             
+            # Проверяем существование выходной таблицы
+            tables = inspector.get_table_names(schema=self.schema)
+            table_exists = self.output_table_name.lower() in [t.lower() for t in tables]
+            
+            # Запрашиваем у пользователя режим работы с таблицей
+            if table_exists:
+                response = messagebox.askyesnocancel(
+                    "Таблица уже существует",
+                    f"Таблица {self.output_table_name} уже существует.\n\nВыберите действие:",
+                    icon='question',
+                    default='cancel',
+                    detail="Нажмите 'Да' чтобы добавить новые данные к существующим\nНажмите 'Нет' чтобы удалить существующие данные и перезаписать новую таблицу"
+                )
+                
+                if response is None:  # Пользователь нажал Cancel или закрыл окно
+                    print("Операция отменена пользователем")
+                    return
+                
+                # Сохраняем выбор пользователя
+                append_mode = response  # True для дополнения, False для перезаписи
+            
             # ЭТАП 1: Сбор данных для сохранения
             # ----------------------------------------
             output_data = []  # Данные для выходной таблицы
             update_data = []  # Данные для обновления ключей
             
             for item in addresses:
-                # Данные для выходной таблицы
-                output_data.append({
-                    'raw_address': item.raw,
-                    'street_name': item.Name,
-                    'street_type': item.Type,
-                    'house': item.House,
-                    'flat': item.Flat,
-                    'key': item.key
-                })
-                
-                # Данные для обновления ключей
-                if item.key is not None:
-                    if self.id_column:
-                        # Если указана ID-колонка, ищем ID в объекте
-                        id_value = getattr(item, self.id_column, None)
-                        
-                        if id_value is not None:
+                try:
+                    # Проверяем, что item.raw является строкой, а не числом
+                    raw_address = str(item.raw) if item.raw is not None else None
+                    
+                    if raw_address is None:
+                        print("Пропуск записи с пустым адресом")
+                        continue
+                    
+                    # Данные для выходной таблицы
+                    output_data.append({
+                        'raw_address': raw_address,
+                        'street_name': item.Name if hasattr(item, 'Name') else None,
+                        'street_type': item.Type if hasattr(item, 'Type') else None,
+                        'house': item.House if hasattr(item, 'House') else None,
+                        'flat': item.Flat if hasattr(item, 'Flat') else None,
+                        'key': item.key
+                    })
+                    
+                    # Данные для обновления ключей
+                    if item.key is not None:
+                        if self.id_column:
+                            # Если указана ID-колонка, ищем ID в объекте
+                            id_value = getattr(item, 'ID', None)  # Используем 'ID' вместо self.id_column
+                            
+                            if id_value is not None:
+                                try:
+                                    # Преобразуем ID в число, если это возможно
+                                    if isinstance(id_value, str):
+                                        try:
+                                            id_value = int(id_value)
+                                        except ValueError:
+                                            # Если не удалось преобразовать в число, оставляем как строку
+                                            pass
+                                    
+                                    update_data.append({
+                                        'id': id_value,
+                                        'key': int(item.key) if isinstance(item.key, (int, float, str)) else item.key
+                                    })
+                                    print(f"Добавлены данные для обновления с ID: {id_value}, key: {item.key}")
+                                except (ValueError, TypeError) as e:
+                                    print(f"Ошибка при обработке ID={id_value}, key={item.key}: {e}")
+                            else:
+                                print(f"ID не найден для записи с ключом {item.key}")
+                        else:
+                            # Если ID-колонка не указана, используем адрес как идентификатор
                             try:
                                 update_data.append({
-                                    'id': int(id_value) if isinstance(id_value, (int, float, str)) else id_value,
+                                    'address': raw_address,
                                     'key': int(item.key) if isinstance(item.key, (int, float, str)) else item.key
                                 })
-                                print(f"Добавлены данные для обновления с ID: {id_value}, key: {item.key}")
+                                print(f"Добавлены данные для обновления по адресу: '{raw_address}', key: {item.key}")
                             except (ValueError, TypeError) as e:
-                                print(f"Ошибка при обработке ID={id_value}, key={item.key}: {e}")
-                        else:
-                            print(f"ID не найден для записи с ключом {item.key}")
-                    else:
-                        # Если ID-колонка не указана, используем адрес как идентификатор
-                        try:
-                            update_data.append({
-                                'address': item.raw,
-                                'key': int(item.key) if isinstance(item.key, (int, float, str)) else item.key
-                            })
-                            print(f"Добавлены данные для обновления по адресу: '{item.raw}', key: {item.key}")
-                        except (ValueError, TypeError) as e:
-                            print(f"Ошибка при обработке address='{item.raw}', key={item.key}: {e}")
+                                print(f"Ошибка при обработке address='{raw_address}', key={item.key}: {e}")
+                except Exception as e:
+                    print(f"Ошибка при обработке записи: {str(e)}")
+                    print(f"Детали записи: {item.__dict__}")
+                    continue
             
             print(f"Подготовлено {len(output_data)} записей для выходной таблицы")
             print(f"Подготовлено {len(update_data)} записей для обновления ключей")
@@ -128,17 +175,28 @@ class ImprovedDatabaseOutputWorker(OutputWorker):
                     extend_existing=True
                 )
                 
-                # Создаем таблицу в БД (если не существует)
-                output_table.create(self.engine, checkfirst=True)
-                print("Выходная таблица создана или уже существует")
-                
-                # Записываем данные в выходную таблицу
-                if output_data:
+                if table_exists:
+                    if append_mode:  # Дополнение существующей таблицы
+                        with self.engine.begin() as conn:
+                            conn.execute(output_table.insert(), output_data)
+                        print(f"Добавлено {len(output_data)} записей в существующую таблицу")
+                    else:  # Перезапись таблицы
+                        output_table.drop(self.engine, checkfirst=True)
+                        output_table.create(self.engine)
+                        with self.engine.begin() as conn:
+                            conn.execute(output_table.insert(), output_data)
+                        print(f"Таблица перезаписана, добавлено {len(output_data)} записей")
+                else:
+                    # Создаем новую таблицу
+                    output_table.create(self.engine)
                     with self.engine.begin() as conn:
                         conn.execute(output_table.insert(), output_data)
-                    print(f"Сохранено {len(output_data)} записей в выходную таблицу")
+                    print(f"Создана новая таблица с {len(output_data)} записями")
+                
             except Exception as e:
-                print(f"Ошибка при работе с выходной таблицей: {e}")
+                print(f"Ошибка при работе с выходной таблицей: {str(e)}")
+                print(f"Трассировка: {traceback.format_exc()}")
+                raise Exception(f"Ошибка при работе с выходной таблицей: {str(e)}")
             
             # ЭТАП 3: Обновление ключей во входной таблице
             # ----------------------------------------
@@ -216,21 +274,7 @@ class ImprovedDatabaseOutputWorker(OutputWorker):
                     with self.engine.begin() as conn:
                         conn.execute(text(f'ALTER TABLE "{self.schema}"."{actual_table_name}" ADD COLUMN "key_street_house" INTEGER'))
                     print("Колонка key_street_house создана")
-                    
-                    # Проверяем создание колонки
-                    time.sleep(1)  # Даем БД время на обновление метаданных
-                    inspector = inspect(self.engine)  # Получаем свежий инспектор
-                    columns = inspector.get_columns(actual_table_name, schema=self.schema)
-                    for col in columns:
-                        if col['name'].lower() == 'key_street_house':
-                            key_column_name = col['name']
-                            print(f"Подтверждено создание колонки: {key_column_name}")
-                            break
-                    
-                    if not key_column_name:
-                        print("Не удалось подтвердить создание колонки key_street_house через инспектор метаданных.")
-                        print("Продолжаем обработку, так как колонка, вероятно, была создана успешно...")
-                        key_column_name = "key_street_house"  # Используем имя по умолчанию
+                    key_column_name = "key_street_house"
                 
                 # ЭТАП 4: Обновление ключей
                 # ----------------------------------------
@@ -270,7 +314,7 @@ class ImprovedDatabaseOutputWorker(OutputWorker):
                             # Используем id как идентификатор
                             id_val = update['id']
                             key_val = update['key']
-                            sql = f'UPDATE "{self.schema}"."{actual_table_name}" SET "{key_column_name}" = {key_val} WHERE "{id_column_name}" = {id_val}'
+                            sql = f'UPDATE "{self.schema}"."{actual_table_name}" SET "{key_column_name}" = {key_val} WHERE "{self.id_column}" = {id_val}'
                             if success_count < 5:  # Показываем только первые несколько запросов
                                 print(f"SQL запрос: {sql}")
                         
@@ -284,67 +328,10 @@ class ImprovedDatabaseOutputWorker(OutputWorker):
                     except Exception as e:
                         error_count += 1
                         if error_count <= 5:  # Ограничиваем вывод ошибок
-                            print(f"Ошибка при обновлении записи: {e}")
+                            print(f"Ошибка при обновлении записи: {str(e)}")
+                            print(f"Детали обновления: {update}")
                 
                 print(f"Всего успешно обновлено: {success_count}, ошибок: {error_count}")
-                
-                # МЕТОД 2: Массовое обновление (если нужно)
-                if initial_keys_count == 0 and len(update_data) > 0:
-                    print("\nМЕТОД 1 не дал результатов. Пробуем МЕТОД 2: Пакетное обновление...")
-                    
-                    try:
-                        # Создаем временную таблицу
-                        cursor.execute('DROP TABLE IF EXISTS temp_key_updates')
-                        
-                        if using_address:
-                            # Таблица с адресами
-                            cursor.execute('CREATE TEMP TABLE temp_key_updates (addr_val TEXT, key_val INTEGER)')
-                            for update in update_data:
-                                addr_val = update['address'].strip().replace("'", "''")
-                                cursor.execute('INSERT INTO temp_key_updates VALUES (%s, %s)', 
-                                              (addr_val, update['key']))
-                            
-                            # SQL для обновления
-                            sql = f'''
-                            UPDATE "{self.schema}"."{actual_table_name}" AS t
-                            SET "{key_column_name}" = k.key_val
-                            FROM temp_key_updates AS k
-                            WHERE TRIM(BOTH FROM UPPER(t."{address_column_name}")) = UPPER(TRIM(BOTH FROM k.addr_val))
-                            '''
-                        else:
-                            # Таблица с ID
-                            cursor.execute('CREATE TEMP TABLE temp_key_updates (id_val INTEGER, key_val INTEGER)')
-                            for update in update_data:
-                                cursor.execute('INSERT INTO temp_key_updates VALUES (%s, %s)', 
-                                              (update['id'], update['key']))
-                            
-                            # SQL для обновления
-                            sql = f'''
-                            UPDATE "{self.schema}"."{actual_table_name}" AS t
-                            SET "{key_column_name}" = k.key_val
-                            FROM temp_key_updates AS k
-                            WHERE t."{self.id_column}" = k.id_val
-                            '''
-                        
-                        # Выполняем обновление
-                        print(f"Выполняем запрос: {sql}")
-                        cursor.execute(sql)
-                        affected = cursor.rowcount
-                        conn.commit()
-                        
-                        # Проверяем результаты
-                        cursor.execute(sql_check)
-                        method2_keys_count = cursor.fetchone()[0]
-                        
-                        print("\n===== РЕЗУЛЬТАТЫ МЕТОДА 2 =====")
-                        print(f"Было записей с ключами: {initial_keys_count}")
-                        print(f"Стало записей с ключами: {method2_keys_count}")
-                        print(f"Добавлено новых ключей: {method2_keys_count - initial_keys_count}")
-                        print(f"Обновлено записей: {affected}")
-                        
-                    except Exception as e:
-                        conn.rollback()
-                        print(f"Ошибка при выполнении МЕТОДА 2: {e}")
                 
                 # Финальная проверка
                 print("\n===== ФИНАЛЬНЫЕ РЕЗУЛЬТАТЫ =====")
@@ -360,10 +347,14 @@ class ImprovedDatabaseOutputWorker(OutputWorker):
                 conn.close()
             
             except Exception as e:
-                print(f"Ошибка при анализе структуры БД: {e}")
+                print(f"Ошибка при анализе структуры БД: {str(e)}")
+                print(f"Трассировка: {traceback.format_exc()}")
+                raise Exception(f"Ошибка при анализе структуры БД: {str(e)}")
             
             print("\n===== ЗАВЕРШЕНИЕ ПРОЦЕССА СОХРАНЕНИЯ =====")
             
         except Exception as e:
-            self.logger.write(f"Ошибка при сохранении результатов: {str(e)}\n")
-            raise e 
+            error_msg = f"Ошибка при сохранении результатов: {str(e)}\n{traceback.format_exc()}"
+            print(error_msg)
+            self.logger.write(error_msg)
+            raise Exception(error_msg) 

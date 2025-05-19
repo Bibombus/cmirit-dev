@@ -504,13 +504,6 @@ class DataBaseFrame(ProcessFrame):
                     except Exception as e:
                         errors.append(f"Таблица '{schema}.{input_table}' не найдена в базе данных. Ошибка: {str(e)}")
                         return len(errors) == 0, errors
-                    
-                    # Проверяем существование выходной таблицы
-                    try:
-                        Table(output_table, metadata, autoload_with=engine)
-                        errors.append(f"Таблица '{schema}.{output_table}' уже существует в базе данных")
-                    except Exception:
-                        pass
             except Exception as e:
                 errors.append(f"Параметры подключения введены неверно, проверьте соответствие данных пользователя, сервера и БД: {str(e)}")
         
