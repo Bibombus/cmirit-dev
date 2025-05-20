@@ -9,6 +9,7 @@ import sys
 from tkinter import Listbox, messagebox
 import time
 import traceback
+import re
 
 import pandas as pd
 from sqlalchemy import Engine, Integer, create_engine, MetaData, Table, Column, String, text, select
@@ -102,6 +103,11 @@ class ImprovedDatabaseOutputWorker(OutputWorker):
                         print("Пропуск записи с пустым адресом")
                         continue
                     
+                    # Нормализуем адрес для поиска
+                    normalized_address = self._normalize_address(raw_address)
+                    print(f"Обработка адреса: {raw_address}")
+                    print(f"Нормализованный адрес: {normalized_address}")
+                    
                     # Данные для выходной таблицы
                     output_data.append({
                         'raw_address': raw_address,
@@ -109,8 +115,14 @@ class ImprovedDatabaseOutputWorker(OutputWorker):
                         'street_type': item.Type if hasattr(item, 'Type') else None,
                         'house': item.House if hasattr(item, 'House') else None,
                         'flat': item.Flat if hasattr(item, 'Flat') else None,
-                        'key': item.key
+                        'key': item.key,
+                        'note': item.note if hasattr(item, 'note') else ("Адрес не распознан" if item.address is None or item.key is None else None)
                     })
+                    
+                    # Проверяем, был ли адрес успешно распознан для обновления ключей
+                    if item.address is None or item.key is None:
+                        print(f"Адрес не распознан: {raw_address}")
+                        continue
                     
                     # Данные для обновления ключей
                     if item.key is not None:
@@ -172,6 +184,7 @@ class ImprovedDatabaseOutputWorker(OutputWorker):
                     Column('house', String),
                     Column('flat', String),
                     Column('key', Integer),
+                    Column('note', String),
                     extend_existing=True
                 )
                 
@@ -357,4 +370,101 @@ class ImprovedDatabaseOutputWorker(OutputWorker):
             error_msg = f"Ошибка при сохранении результатов: {str(e)}\n{traceback.format_exc()}"
             print(error_msg)
             self.logger.write(error_msg)
-            raise Exception(error_msg) 
+            raise Exception(error_msg)
+            
+    def _normalize_address(self, address: str) -> str:
+        """Нормализует адрес для поиска.
+        
+        Args:
+            address (str): Исходный адрес.
+            
+        Returns:
+            str: Нормализованный адрес.
+        """
+        if not address:
+            return ""
+            
+        print(f"\nОбработка адреса: {address}")
+            
+        # Приводим к верхнему регистру
+        address = address.upper()
+        print(f"После приведения к верхнему регистру: {address}")
+        
+        # Заменяем различные варианты написания на стандартные
+        replacements = {
+            'УЛИЦА': 'УЛ.',
+            'УЛ ': 'УЛ.',
+            'УЛ.': 'УЛ.',
+            'ПРОСПЕКТ': 'ПР-КТ',
+            'ПРОСП': 'ПР-КТ',
+            'ПР-Т': 'ПР-КТ',
+            'ПРОЕЗД': 'ПР-Д',
+            'ПР.': 'ПР-Д',
+            'БУЛЬВАР': 'Б-Р',
+            'БУЛ': 'Б-Р',
+            'ПЛОЩАДЬ': 'ПЛ.',
+            'ПЛ ': 'ПЛ.',
+        }
+        
+        # Применяем замены
+        for old, new in replacements.items():
+            address = address.replace(old, new)
+        print(f"После замены сокращений: {address}")
+            
+        # Убираем лишние пробелы
+        address = ' '.join(address.split())
+        
+        # Удаляем префиксы типа "УЛ." если они есть в начале
+        prefixes = ['УЛ.', 'ПР-КТ', 'ПР-Д', 'Б-Р', 'ПЛ.']
+        for prefix in prefixes:
+            if address.startswith(prefix):
+                address = address[len(prefix):].strip()
+                break
+        print(f"После удаления префиксов: {address}")
+                
+        # Специальные правила для составных имен
+        special_rules = {
+            'ОКИНИНА': 'ПАРТИЗАНА ОКИНИНА',
+            'БЕЛЯЕВА': 'КОСМОНАВТА БЕЛЯЕВА',
+            'ЛИБКНЕХТА': 'КАРЛА ЛИБКНЕХТА',
+            'ЛЮКСЕМБУРГ': 'РОЗЫ ЛЮКСЕМБУРГ',
+            'РОЗЫ': 'РОЗЫ ЛЮКСЕМБУРГ',
+            'ГОРЬКОГО': 'МАКСИМА ГОРЬКОГО',
+            'БЕЛОВА': 'ГЕНЕРАЛА БЕЛОВА',
+            'ТРУБИЦЫНА': 'ПРОТОИЕРЕЯ ГЕОРГИЯ ТРУБИЦЫНА'
+        }
+        
+        # Разбиваем адрес на части
+        parts = address.split()
+        print(f"Части адреса: {parts}")
+        
+        # Создаем новый список для результата
+        result_parts = []
+        
+        # Обрабатываем каждую часть
+        i = 0
+        while i < len(parts):
+            current_word = parts[i]
+            print(f"\nОбработка слова: {current_word}")
+            
+            # Проверяем, есть ли это слово в правилах
+            if current_word in special_rules:
+                print(f"Найдено правило для слова {current_word}")
+                # Проверяем, не является ли это частью уже замененного имени
+                if not any(special_rules[current_word] in ' '.join(result_parts)):
+                    print(f"Применяем правило: {current_word} -> {special_rules[current_word]}")
+                    result_parts.append(special_rules[current_word])
+                else:
+                    print(f"Пропускаем замену, так как это часть уже замененного имени")
+                    result_parts.append(current_word)
+            else:
+                print(f"Правило не найдено, оставляем как есть")
+                result_parts.append(current_word)
+            
+            i += 1
+        
+        # Собираем адрес обратно
+        normalized_address = ' '.join(result_parts)
+        print(f"Итоговый нормализованный адрес: {normalized_address}")
+        
+        return normalized_address 

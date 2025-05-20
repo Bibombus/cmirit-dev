@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 import pandas as pd
 import threading
-from sqlalchemy import func, select, MetaData, Table, inspect
+from sqlalchemy import func, select, MetaData, Table, inspect, text
 from main import make_engine
 
 from tkinter import *
@@ -18,6 +18,8 @@ from .OutputWorker.outputWorker import GUILogger, LoggersCollection
 from main import process_excel, process_db, ErrorHandlingMode, ProcessingStats
 from .OutputWorker.outputWorker import LoggersCollection as logger
 import time
+
+from .db_connection_manager import DBConnectionManager, ConnectionParams
 
 def make_field_frame(parent: Widget, label: str) -> Entry:
     """Создает фрейм и вложенные в него однострочное поле для ввода и подпись к нему (слева от поля).
@@ -370,27 +372,168 @@ class ExcelFileFrame(ProcessFrame):
         return args
 
 
+class AutocompleteEntry(Entry):
+    def __init__(self, parent, values=None, **kwargs):
+        super().__init__(parent, **kwargs)
+        self.values = values or []
+        self._hits = []
+        self._hit_index = 0
+        self.position = 0
+        
+        self.bind('<KeyRelease>', self._on_keyrelease)
+        self.bind('<KeyPress>', self._on_keypress)
+        
+        # Создаем всплывающее окно
+        self.popup = Toplevel(self)
+        self.popup.withdraw()
+        self.popup.overrideredirect(True)
+        
+        # Создаем список для отображения подсказок
+        self.listbox = Listbox(self.popup, width=40, height=5)
+        self.listbox.pack()
+        self.listbox.bind('<Button-1>', self._on_select)
+        
+    def _on_keyrelease(self, event):
+        if event.keysym in ('Up', 'Down', 'Return', 'Escape'):
+            return
+            
+        value = self.get()
+        if value == '':
+            self._hits = []
+            self.popup.withdraw()
+            return
+            
+        # Ищем совпадения
+        self._hits = [x for x in self.values if x.lower().startswith(value.lower())]
+        
+        if self._hits:
+            self._show_popup()
+        else:
+            self.popup.withdraw()
+            
+    def _on_keypress(self, event):
+        if event.keysym == 'Up':
+            if self._hits:
+                self._hit_index = (self._hit_index - 1) % len(self._hits)
+                self.listbox.selection_clear(0, END)
+                self.listbox.selection_set(self._hit_index)
+                self.listbox.see(self._hit_index)
+        elif event.keysym == 'Down':
+            if self._hits:
+                self._hit_index = (self._hit_index + 1) % len(self._hits)
+                self.listbox.selection_clear(0, END)
+                self.listbox.selection_set(self._hit_index)
+                self.listbox.see(self._hit_index)
+        elif event.keysym == 'Return':
+            if self._hits:
+                self.delete(0, END)
+                self.insert(0, self._hits[self._hit_index])
+                self.popup.withdraw()
+        elif event.keysym == 'Escape':
+            self.popup.withdraw()
+            
+    def _show_popup(self):
+        # Обновляем список
+        self.listbox.delete(0, END)
+        for item in self._hits:
+            self.listbox.insert(END, item)
+            
+        # Позиционируем всплывающее окно
+        x = self.winfo_rootx()
+        y = self.winfo_rooty() + self.winfo_height()
+        self.popup.geometry(f'+{x}+{y}')
+        self.popup.deiconify()
+        
+    def _on_select(self, event):
+        if self.listbox.curselection():
+            index = self.listbox.curselection()[0]
+            value = self.listbox.get(index)
+            self.delete(0, END)
+            self.insert(0, value)
+            self.popup.withdraw()
+            
+    def set_values(self, values):
+        """Обновляет список значений для автодополнения."""
+        self.values = values
+
+
 class DataBaseFrame(ProcessFrame):
     """ Форма заполнения для обработки адресов в БД """
 
 
-    def __init__(self, parent, process_handler, make_engine, logger, check_connection_handler):
+    def __init__(self, parent, process_handler, logger):
         super().__init__(parent, process_handler, logger)
-        self._check_connection_handler = check_connection_handler
-        self._make_engine = make_engine
-        self.process_button = None
+        self.connection_manager = DBConnectionManager()
         self.initUI()
 
+    def _on_user_change(self, event=None):
+        """Обработчик изменения поля пользователя."""
+        user = self.user_entry.get()
+        if user:
+            # Получаем последние использованные параметры для пользователя
+            params = self.connection_manager.get_connection_params(user)
+            if params:
+                # Обновляем списки автодополнения
+                hosts = list(set(p.host for p in params))  # Убираем дубликаты
+                db_names = list(set(p.db_name for p in params))  # Убираем дубликаты
+                self.host_entry.set_values(hosts)
+                self.db_name_entry.set_values(db_names)
+                
+                # Устанавливаем последние использованные параметры
+                last_params = params[-1]
+                self.host_entry.delete(0, END)
+                self.host_entry.insert(0, last_params.host)
+                self.port_combobox.set(last_params.port)
+                self.db_name_entry.delete(0, END)
+                self.db_name_entry.insert(0, last_params.db_name)
+                self.schema_combobox.set(last_params.schema)
 
-    @property
-    def check_connection_handler(self):
-        return self._check_connection_handler
+    def _on_host_change(self, event=None):
+        """Обработчик изменения поля хоста."""
+        host = self.host_entry.get()
+        if host:
+            # Получаем список портов для хоста
+            ports = self.connection_manager.get_host_ports(host)
+            if ports:
+                self.port_combobox['values'] = list(set(ports))  # Убираем дубликаты
+                self.port_combobox.set(ports[0])  # Устанавливаем первый порт
 
+    def _on_db_name_change(self, event=None):
+        """Обработчик изменения поля имени БД."""
+        db_name = self.db_name_entry.get()
+        if db_name:
+            # Получаем список схем для БД
+            schemas = self.connection_manager.get_db_schemas(db_name)
+            if schemas:
+                self.schema_combobox['values'] = list(set(schemas))  # Убираем дубликаты
+                self.schema_combobox.set(schemas[0])  # Устанавливаем первую схему
 
-    @check_connection_handler.setter
-    def check_connection_handler(self, _value):
-        self._check_connection_handler = _value
-
+    def _save_connection_params(self):
+        """Сохраняет параметры подключения."""
+        try:
+            params = ConnectionParams(
+                dbms=self.db_combobox.get(),
+                user=self.user_entry.get(),
+                password_hash="",  # Будет установлено в save_connection
+                host=self.host_entry.get(),
+                port=self.port_combobox.get(),
+                db_name=self.db_name_entry.get(),
+                schema=self.schema_combobox.get()
+            )
+            self.connection_manager.save_connection(params, self.password_entry.get())
+            
+            # Обновляем списки автодополнения
+            user_params = self.connection_manager.get_connection_params(params.user)
+            if user_params:
+                hosts = list(set(p.host for p in user_params))
+                db_names = list(set(p.db_name for p in user_params))
+                self.host_entry.set_values(hosts)
+                self.db_name_entry.set_values(db_names)
+            
+            messagebox.showinfo("Успех!", "Параметры подключения успешно сохранены")
+            
+        except Exception as e:
+            messagebox.showerror("Ошибка!", f"Не удалось сохранить параметры подключения: {str(e)}")
 
     def _validate_connection_params(self) -> tuple[bool, list[str]]:
         """Проверяет параметры подключения к базе данных."""
@@ -410,7 +553,13 @@ class DataBaseFrame(ProcessFrame):
         }
         
         for field, label in required_fields.items():
-            value = getattr(self, f'{field}_entry').get()
+            if field == 'port':
+                value = self.port_combobox.get()
+            elif field == 'schema':
+                value = self.schema_combobox.get()
+            else:
+                value = getattr(self, f'{field}_entry').get()
+                
             if not value:
                 errors.append(f"Поле '{label}' не заполнено")
             else:
@@ -439,7 +588,7 @@ class DataBaseFrame(ProcessFrame):
         errors = []
         
         # Проверка схемы БД
-        schema = self.schema_entry.get()
+        schema = self.schema_combobox.get()
         if not schema:
             errors.append("Не указана схема БД")
         elif not re.match(r'^[a-zA-Z0-9_]+$', schema):
@@ -470,14 +619,14 @@ class DataBaseFrame(ProcessFrame):
                 # Проверяем только если все параметры подключения заполнены
                 if all([
                     self.host_entry.get(),
-                    self.port_entry.get(),
+                    self.port_combobox.get(),
                     self.user_entry.get(),
                     self.password_entry.get(),
                     self.db_name_entry.get(),
-                    self.schema_entry.get()
+                    self.schema_combobox.get()
                 ]):
                     args = self._get_args()
-                    engine = self._make_engine(**args)
+                    engine = make_engine(**args)
                     
                     # Сначала проверим наличие схемы в БД
                     try:
@@ -512,12 +661,18 @@ class DataBaseFrame(ProcessFrame):
 
     def _real_conn_check(self):
         """Проверяет подключение к базе данных и параметры таблиц."""
-        print("Начало проверки подключения")  # Отладочная информация
+        print("\n===== НАЧАЛО ПРОВЕРКИ ПОДКЛЮЧЕНИЯ =====")
+        print(f"DBMS: {self.db_combobox.get()}")
+        print(f"User: {self.user_entry.get()}")
+        print(f"Host: {self.host_entry.get()}")
+        print(f"Port: {self.port_combobox.get()}")
+        print(f"DB Name: {self.db_name_entry.get()}")
+        print(f"Schema: {self.schema_combobox.get()}")
         
         # Проверка параметров подключения
         conn_valid, conn_errors = self._validate_connection_params()
         if not conn_valid:
-            print(f"Ошибки в параметрах подключения: {conn_errors}")  # Отладочная информация
+            print(f"Ошибки в параметрах подключения: {conn_errors}")
             messagebox.showerror("Ошибка!", "\n".join(conn_errors))
             self.process_button.config(state=DISABLED)
             return
@@ -532,27 +687,36 @@ class DataBaseFrame(ProcessFrame):
         
         # Если все проверки пройдены, проверяем подключение
         try:
-            print(f"check_connection_handler: {self._check_connection_handler}")  
-            if self._check_connection_handler:
-                print("Вызов check_connection_handler")  
-                self._check_connection_handler(**self._get_args())
-                print("check_connection_handler выполнен успешно") 
-            else:
-                print("check_connection_handler не установлен")  
-                messagebox.showerror("Ошибка!", "Обработчик проверки подключения не установлен")
-                return
-                
+            print("\nПроверка подключения к БД...")
+            args = self._get_args()
+            print(f"Параметры подключения: {args}")
+            
+            engine = make_engine(**args)
+            print("Движок БД создан успешно")
+            
+            # Проверяем подключение
+            with engine.connect() as conn:
+                print("Соединение установлено, выполняется тестовый запрос...")
+                conn.execute(text("SELECT 1"))
+                print("Тестовый запрос выполнен успешно")
+            
+            print("Подключение успешно установлено")
             messagebox.showinfo("Успех!", "Подключение к базе данных успешно установлено")
             self.process_button.config(state=NORMAL)
+            
         except Exception as e:
             print(f"Ошибка при проверке подключения: {str(e)}")  
+            print(f"Тип ошибки: {type(e)}")
+            import traceback
+            print(f"Трассировка: {traceback.format_exc()}")
             messagebox.showerror("Ошибка!", f"Не удалось подключиться к базе данных: {str(e)}")
             self.process_button.config(state=DISABLED)
+        
+        print("===== КОНЕЦ ПРОВЕРКИ ПОДКЛЮЧЕНИЯ =====\n")
 
 
     def initUI(self):
         """ Производит инициализацию интерфейса. """
-
         self.pack(fill=BOTH, expand=True)
 
         # Выбор СУБД
@@ -562,25 +726,60 @@ class DataBaseFrame(ProcessFrame):
         db_choice_label = Label(db_choice_frame, text="СУБД:")
         db_choice_label.pack(side=LEFT, padx=5, pady=5)
 
-        self.db_combobox = Combobox(db_choice_frame, values=["Oracle", "PostgreSQL", "MSSQL Server"], state='readonly') 
+        self.db_combobox = Combobox(db_choice_frame, values=["Oracle", "PostgreSQL", "MSSQL Server"], state='readonly')
         self.db_combobox.pack(fill=X, padx=5, expand=True)
+        self.db_combobox.set("PostgreSQL")
 
         # Данные подключения
         connection_frame = LabelFrame(self, text="Данные подключения")
         connection_frame.pack(fill=X, padx=5, pady=5, anchor=N)
 
-        self.user_entry = make_field_frame(connection_frame, "Пользователь:")
+        # Пользователь
+        user_frame = Frame(connection_frame)
+        user_frame.pack(fill=X)
+        Label(user_frame, text="Пользователь:", width=35).pack(side=LEFT, padx=5, pady=5)
+        self.user_entry = AutocompleteEntry(user_frame)
+        self.user_entry.pack(fill=X, padx=5, expand=True)
         self.user_entry.insert(0, 'postgres')
+        self.user_entry.bind('<FocusOut>', self._on_user_change)
+
+        # Пароль
         self.password_entry = make_field_frame(connection_frame, "Пароль:")
         self.password_entry.insert(0, '1234')
-        self.host_entry = make_field_frame(connection_frame, "Хост:")
+
+        # Хост
+        host_frame = Frame(connection_frame)
+        host_frame.pack(fill=X)
+        Label(host_frame, text="Хост:", width=35).pack(side=LEFT, padx=5, pady=5)
+        self.host_entry = AutocompleteEntry(host_frame)
+        self.host_entry.pack(fill=X, padx=5, expand=True)
         self.host_entry.insert(0, 'localhost')
-        self.port_entry = make_field_frame(connection_frame, "Порт:")
-        self.port_entry.insert(0, '5435')
-        self.db_name_entry = make_field_frame(connection_frame, "Название БД:")
+        self.host_entry.bind('<FocusOut>', self._on_host_change)
+
+        # Порт
+        port_frame = Frame(connection_frame)
+        port_frame.pack(fill=X)
+        Label(port_frame, text="Порт:", width=35).pack(side=LEFT, padx=5, pady=5)
+        self.port_combobox = Combobox(port_frame)
+        self.port_combobox.pack(fill=X, padx=5, expand=True)
+        self.port_combobox.insert(0, '5432')
+
+        # Имя БД
+        db_name_frame = Frame(connection_frame)
+        db_name_frame.pack(fill=X)
+        Label(db_name_frame, text="Название БД:", width=35).pack(side=LEFT, padx=5, pady=5)
+        self.db_name_entry = AutocompleteEntry(db_name_frame)
+        self.db_name_entry.pack(fill=X, padx=5, expand=True)
         self.db_name_entry.insert(0, 'postgres')
-        self.schema_entry = make_field_frame(connection_frame, "Схема БД:")
-        self.schema_entry.insert(0, 'public')
+        self.db_name_entry.bind('<FocusOut>', self._on_db_name_change)
+
+        # Схема
+        schema_frame = Frame(connection_frame)
+        schema_frame.pack(fill=X)
+        Label(schema_frame, text="Схема БД:", width=35).pack(side=LEFT, padx=5, pady=5)
+        self.schema_combobox = Combobox(schema_frame)
+        self.schema_combobox.pack(fill=X, padx=5, expand=True)
+        self.schema_combobox.insert(0, 'public')
 
         # Данные о входной таблице в БД
         input_table_frame = LabelFrame(self, text='Данные о входной таблице')
@@ -595,6 +794,7 @@ class DataBaseFrame(ProcessFrame):
         output_table_frame.pack(fill=X, padx=5, pady=5, anchor=N)
 
         self.output_table_entry = make_field_frame(output_table_frame, "Название таблицы для результатов:")
+        self.output_table_entry.insert(0, 'log_address_recognition')
 
         # Кнопки действий
         actions_frame = Frame(self)
@@ -602,6 +802,9 @@ class DataBaseFrame(ProcessFrame):
 
         check_button = Button(actions_frame, text="Проверить подключение", command=self._real_conn_check)
         check_button.pack(side=LEFT, padx=5, pady=5)
+
+        save_params_button = Button(actions_frame, text="Сохранить параметры", command=self._save_connection_params)
+        save_params_button.pack(side=LEFT, padx=5, pady=5)
 
         self.process_button = Button(actions_frame, text="Обработать", width=20, command=self._real_handler, state=DISABLED)
         self.process_button.pack(padx=5, pady=5)
@@ -625,9 +828,9 @@ class DataBaseFrame(ProcessFrame):
             'user': self.user_entry.get(),
             'password': self.password_entry.get(),
             'host': self.host_entry.get(),
-            'port': self.port_entry.get(),
+            'port': self.port_combobox.get(),
             'db_name': self.db_name_entry.get(),
-            'schema': self.schema_entry.get(),
+            'schema': self.schema_combobox.get(),
             'input_table_name': self.input_table_name_entry.get(),
             'id_column': self.id_entry.get().strip() if self.id_entry.get().strip() != '' else None,
             'address_column': self.address_entry.get(),
@@ -1023,7 +1226,7 @@ class MainWindow(Tk):
         
         # Создаем фреймы для вкладок
         self.excel_frame = ExcelFileFrame(self.notebook, self.process_excel, self.logger)
-        self.db_frame = DataBaseFrame(self.notebook, self.process_db, self.make_engine, self.logger, self.check_connection_handler)
+        self.db_frame = DataBaseFrame(self.notebook, self.process_db, self.logger)
         self.errors_frame = ErrorsFrame(self.notebook, self.logger)
         self.exceptions_frame = ExceptionsFrame(self.notebook, self.logger)
         

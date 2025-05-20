@@ -160,7 +160,7 @@ def process_excel(input_path: str, input_sheet: str, address_name: str, output_p
     try:
         outputWorker = SingleTableExcelOutputWorker(output_path, logger)
         total_processed = 0
-        batch_size = 100  # Размер пакета для обновления прогресса
+        batch_size = 100
         
         def parse():
             nonlocal total_processed
@@ -187,7 +187,11 @@ def process_excel(input_path: str, input_sheet: str, address_name: str, output_p
                     data['address'], data['key'], message = process(data['raw'], exceptions_manager)
                     if message:
                         data['note'] = message
-                    stats.add_success()
+                        stats.add_failure(data['raw'], Exception(message))
+                    elif data['address'] is None or data['key'] is None:
+                        stats.add_failure(data['raw'], Exception("Адрес не был распознан"))
+                    else:
+                        stats.add_success()
                     yield AddressDTO(**data)
                 except Exception as e:
                     stats.add_failure(data['raw'], e)
@@ -319,6 +323,12 @@ def process_db(dbms: str, user: str, password: str, host: str, port: str, db_nam
                             
                             if message:
                                 data['note'] = message
+                                stats.add_failure(str(address), Exception(message))
+                            elif addr is None or key is None:
+                                data['note'] = "Адрес не распознан"
+                                stats.add_failure(str(address), Exception("Адрес не распознан"))
+                            else:
+                                stats.add_success()
                                 
                             print(f"Данные для AddressDTO: {data}")
                             dto = AddressDTO(**data)
@@ -335,10 +345,6 @@ def process_db(dbms: str, user: str, password: str, host: str, port: str, db_nam
                                 
                             addr, key, message = process(str(address), exceptions_manager)
                             
-                            if addr is None:
-                                print(f"Не удалось обработать адрес: {address}")
-                                continue
-                                
                             data = {
                                 'raw': str(address),  # Сохраняем исходный адрес
                                 'address': addr,
@@ -347,11 +353,16 @@ def process_db(dbms: str, user: str, password: str, host: str, port: str, db_nam
                             
                             if message:
                                 data['note'] = message
+                                stats.add_failure(str(address), Exception(message))
+                            elif addr is None or key is None:
+                                data['note'] = "Адрес не распознан"
+                                stats.add_failure(str(address), Exception("Адрес не распознан"))
+                            else:
+                                stats.add_success()
                                 
                             dto = AddressDTO(**data)
                         
                         print(f"Обработка записи: raw={dto.raw}, key={dto.key}")
-                        stats.add_success()
                         yield dto
                     except Exception as ex:
                         stats.add_failure(str(address) if address is not None else "неизвестный адрес", ex)

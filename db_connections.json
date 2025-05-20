@@ -1,0 +1,133 @@
+{
+  "connections": {
+    "postgres": [
+      {
+        "dbms": "PostgreSQL",
+        "user": "postgres",
+        "password_hash": "81dc9bdb52d04dc20036dbd8313ed055",
+        "host": "localhost",
+        "port": "5432",
+        "db_name": "postgres",
+        "schema": "public"
+      },
+      {
+        "dbms": "PostgreSQL",
+        "user": "postgres",
+        "password_hash": "81dc9bdb52d04dc20036dbd8313ed055",
+        "host": "localhost",
+        "port": "5435",
+        "db_name": "postgres",
+        "schema": "public"
+      },
+      {
+        "dbms": "PostgreSQL",
+        "user": "postgres",
+        "password_hash": "81dc9bdb52d04dc20036dbd8313ed055",
+        "host": "localhost",
+        "port": "5432",
+        "db_name": "postgres",
+        "schema": "public"
+      },
+      {
+        "dbms": "PostgreSQL",
+        "user": "postgres",
+        "password_hash": "81dc9bdb52d04dc20036dbd8313ed055",
+        "host": "localhost",
+        "port": "5435",
+        "db_name": "postgres",
+        "schema": "public"
+      },
+      {
+        "dbms": "PostgreSQL",
+        "user": "postgres",
+        "password_hash": "81dc9bdb52d04dc20036dbd8313ed055",
+        "host": "localhost",
+        "port": "5435",
+        "db_name": "postgres",
+        "schema": "public"
+      },
+      {
+        "dbms": "PostgreSQL",
+        "user": "postgres",
+        "password_hash": "81dc9bdb52d04dc20036dbd8313ed055",
+        "host": "localhost",
+        "port": "5435",
+        "db_name": "postgres",
+        "schema": "public"
+      },
+      {
+        "dbms": "PostgreSQL",
+        "user": "postgres",
+        "password_hash": "81dc9bdb52d04dc20036dbd8313ed055",
+        "host": "localhost",
+        "port": "5432",
+        "db_name": "postgres",
+        "schema": "public"
+      },
+      {
+        "dbms": "PostgreSQL",
+        "user": "postgres",
+        "password_hash": "81dc9bdb52d04dc20036dbd8313ed055",
+        "host": "127.0.1.1",
+        "port": "5432",
+        "db_name": "postgres",
+        "schema": "public"
+      },
+      {
+        "dbms": "PostgreSQL",
+        "user": "postgres",
+        "password_hash": "81dc9bdb52d04dc20036dbd8313ed055",
+        "host": "localhost",
+        "port": "5435",
+        "db_name": "postgres",
+        "schema": "public"
+      },
+      {
+        "dbms": "PostgreSQL",
+        "user": "postgres",
+        "password_hash": "827ccb0eea8a706c4c34a16891f84e7b",
+        "host": "localhost",
+        "port": "5433",
+        "db_name": "postgres",
+        "schema": "address"
+      },
+      {
+        "dbms": "PostgreSQL",
+        "user": "postgres",
+        "password_hash": "81dc9bdb52d04dc20036dbd8313ed055",
+        "host": "localhost",
+        "port": "5435",
+        "db_name": "postgres",
+        "schema": "public"
+      }
+    ],
+    "user": [
+      {
+        "dbms": "PostgreSQL",
+        "user": "user",
+        "password_hash": "81dc9bdb52d04dc20036dbd8313ed055",
+        "host": "localhost",
+        "port": "5432",
+        "db_name": "postgres",
+        "schema": "address"
+      }
+    ]
+  },
+  "host_ports": {
+    "localhost": [
+      "5432",
+      "5435",
+      "5433"
+    ],
+    "127.0.1.1": [
+      "5432"
+    ]
+  },
+  "db_schemas": {
+    "postgres": [
+      "address",
+      "public",
+      "information_schema"
+    ]
+  }
+}
