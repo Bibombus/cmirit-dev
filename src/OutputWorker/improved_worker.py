@@ -133,7 +133,7 @@ class ImprovedDatabaseOutputWorker(OutputWorker):
                         'house': item.House if hasattr(item, 'House') else None,
                         'flat': item.Flat if hasattr(item, 'Flat') else None,
                         'key': item.key,
-                        'note': item.note if hasattr(item, 'note') else ("Адрес не распознан" if item.address is None or item.key is None else None)
+                        'note': item.note if hasattr(item, 'note') else ("Нет правильного адреса" if item.address is None or item.key is None else None)
                     })
                     
                     # Проверяем, был ли адрес успешно распознан для обновления ключей
