@@ -108,7 +108,7 @@ class AddressDTO:
             "House": self.House,
             "Flat": self.Flat,
             "Key": self.key
-                }
+        }
         
         # Добавляем все дополнительные поля, кроме служебных
         for key, value in self.__dict__.items():

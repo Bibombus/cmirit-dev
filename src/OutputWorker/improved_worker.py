@@ -21,6 +21,23 @@ from .outputWorker import OutputWorker, AddressDTO, LoggersCollection
 class ImprovedDatabaseOutputWorker(OutputWorker):
     """Улучшенная версия класса для записи в базу данных."""
 
+    # Специальные правила для составных имен
+    SPECIAL_RULES = {
+        'ТРУБИЦЫНА': 'ИМЕНИ ПРОТОИЕРЕЯ ГЕОРГИЯ ТРУБИЦЫНА',
+        'ОКИНИНА': 'ПАРТИЗАНА ОКИНИНА',
+        'БЕЛЯЕВА': 'КОСМОНАВТА БЕЛЯЕВА',
+        'ЛИБКНЕХТА': 'КАРЛА ЛИБКНЕХТА',
+        'ЛЮКСЕМБУРГ': 'РОЗЫ ЛЮКСЕМБУРГ',
+        'РОЗЫ': 'РОЗЫ ЛЮКСЕМБУРГ',
+        'ГОРЬКОГО': 'МАКСИМА ГОРЬКОГО',
+        'БЕЛОВА': 'КОМАНДАРМА БЕЛОВА',
+        'ПЕРЦА': 'СЕРГЕЯ ПЕРЦА',
+        'ПИТОМНИКА': 'ГОРОДСКОГО ПИТОМНИКА',
+        'СЕРОВКИ': 'НАБЕРЕЖНАЯ СЕРОВКИ',
+        'ЮНГ': 'СОЛОВЕЦКИХ ЮНГ',
+        'ЮЖНАЯ': 'ПОДСТАНЦИИ ЮЖНАЯ'
+    }
+
     def __init__(self, engine, input_table_name, output_table_name, schema, id_column=None, logger=None):
         """Инициализация объекта.
         
@@ -372,6 +389,220 @@ class ImprovedDatabaseOutputWorker(OutputWorker):
             self.logger.write(error_msg)
             raise Exception(error_msg)
             
+    def _expand_address_with_rules(self, address: str) -> str:
+        """Преобразует адрес в полную форму с помощью правил.
+        
+        Args:
+            address (str): Исходный адрес.
+            
+        Returns:
+            str: Адрес в полной форме.
+        """
+        if not address:
+            return ""
+            
+        print(f"\n{'='*50}")
+        print(f"РАСШИРЕНИЕ АДРЕСА С ПОМОЩЬЮ ПРАВИЛ")
+        print(f"Исходный адрес: {address}")
+        print(f"{'='*50}")
+        
+        # Приводим к верхнему регистру
+        address = address.upper()
+        print(f"\nПосле приведения к верхнему регистру:")
+        print(f"  - Адрес: {address}")
+        
+        # Заменяем различные варианты написания на стандартные
+        replacements = {
+            'УЛИЦА': 'УЛ.',
+            'УЛ ': 'УЛ.',
+            'УЛ.': 'УЛ.',
+            'ПРОСПЕКТ': 'ПР-КТ',
+            'ПРОСП': 'ПР-КТ',
+            'ПР-Т': 'ПР-КТ',
+            'ПРОЕЗД': 'ПР-Д',
+            'ПР.': 'ПР-Д',
+            'БУЛЬВАР': 'Б-Р',
+            'БУЛ': 'Б-Р',
+            'ПЛОЩАДЬ': 'ПЛ.',
+            'ПЛ ': 'ПЛ.',
+            'ТЕРРИТОРИЯ': 'ТЕР.',
+            'ТЕРРИТ': 'ТЕР.',
+            'ТЕР ': 'ТЕР.',
+            'ТЕР.': 'ТЕР.',
+            'ПОДСТАНЦИЯ': 'ПОДСТ.',
+            'ПОДСТ': 'ПОДСТ.',
+            'ПОДСТ.': 'ПОДСТ.',
+        }
+        
+        # Применяем замены
+        for old, new in replacements.items():
+            if old in address:
+                print(f"  - Замена '{old}' на '{new}'")
+                address = address.replace(old, new)
+        print(f"После замены сокращений:")
+        print(f"  - Адрес: {address}")
+            
+        # Убираем лишние пробелы
+        address = ' '.join(address.split())
+        
+        # Разбиваем адрес на части
+        parts = address.split()
+        print(f"\nЧасти адреса:")
+        print(f"  - {parts}")
+        
+        # Если адрес состоит только из номера дома, возвращаем как есть
+        if len(parts) == 1 and parts[0].isdigit():
+            print(f"Адрес состоит только из номера дома, возвращаем как есть")
+            return address
+            
+        # Получаем номер дома (последнее число в адресе)
+        house_number = None
+        for part in reversed(parts):
+            if part.isdigit():
+                house_number = part
+                break
+                
+        # Убираем номер дома из адреса для обработки
+        if house_number:
+            print(f"\nНомер дома: {house_number}")
+            address = ' '.join(part for part in parts if part != house_number)
+            print(f"Адрес без номера дома:")
+            print(f"  - {address}")
+        
+        # Проверяем наличие префиксов территории
+        territory_prefixes = ['ТЕР.']
+        print(f"\nПроверка префиксов территории:")
+        print(f"  - Доступные префиксы: {territory_prefixes}")
+        print(f"  - Текущий адрес: '{address}'")
+        
+        has_territory_prefix = any(address.startswith(prefix) for prefix in territory_prefixes)
+        print(f"  - Найден префикс территории: {has_territory_prefix}")
+        
+        # Если адрес начинается с префикса территории, сохраняем его
+        territory_prefix = None
+        if has_territory_prefix:
+            print(f"\nОбнаружен префикс территории:")
+            territory_prefix = next(prefix for prefix in territory_prefixes if address.startswith(prefix))
+            print(f"  - Префикс: {territory_prefix}")
+            # Убираем префикс для дальнейшей обработки
+            address = address[len(territory_prefix):].strip()
+            print(f"  - Адрес без префикса: {address}")
+        
+        # Проверяем каждое слово в адресе
+        result_parts = []
+        print(f"\nПрименение специальных правил:")
+        for part in address.split():
+            found_rule = False
+            print(f"  - Проверка слова: '{part}'")
+            for old, new in self.SPECIAL_RULES.items():
+                if old in part:
+                    print(f"    - Найдено правило для слова '{part}': '{new}'")
+                    result_parts.append(new)
+                    found_rule = True
+                    break
+            if not found_rule:
+                print(f"    - Правило не найдено для слова '{part}', оставляем как есть")
+                result_parts.append(part)
+        
+        # Собираем адрес обратно
+        expanded_address = ' '.join(result_parts)
+        
+        # Если был префикс территории, добавляем его обратно
+        if territory_prefix:
+            expanded_address = f"{territory_prefix} {expanded_address}"
+            print(f"\nДобавлен префикс территории обратно:")
+            print(f"  - Адрес с префиксом: {expanded_address}")
+        
+        # Добавляем номер дома обратно, если он был
+        if house_number:
+            expanded_address = f"{expanded_address} {house_number}"
+            
+        print(f"\nИтоговый расширенный адрес:")
+        print(f"  - {expanded_address}")
+        print(f"{'='*50}")
+        
+        return expanded_address
+
+    def _find_best_match(self, address: str, reference_addresses: list[str]) -> str:
+        """Находит наиболее подходящий адрес из справочника с учетом частичных совпадений слов.
+        
+        Args:
+            address (str): Исходный адрес для поиска.
+            reference_addresses (list[str]): Список адресов из справочника.
+            
+        Returns:
+            str: Наиболее подходящий адрес из справочника.
+        """
+        if not address or not reference_addresses:
+            return None
+            
+        print(f"\nПоиск совпадения для адреса: {address}")
+        print(f"Количество адресов в справочнике: {len(reference_addresses)}")
+        
+        # Сначала расширяем адрес с помощью правил
+        expanded_address = self._expand_address_with_rules(address)
+        print(f"Расширенный адрес: {expanded_address}")
+        
+        # Нормализуем расширенный адрес
+        normalized_address = self._normalize_address(expanded_address)
+        print(f"Нормализованный расширенный адрес: {normalized_address}")
+        
+        # Разбиваем нормализованный адрес на слова
+        address_words = set(normalized_address.upper().split())
+        print(f"Слова в нормализованном адресе: {address_words}")
+        
+        best_match = None
+        best_score = 0
+        
+        for ref_addr in reference_addresses:
+            # Нормализуем адрес из справочника
+            ref_addr = self._normalize_address(ref_addr)
+            print(f"\nПроверка адреса из справочника: {ref_addr}")
+            
+            # Разбиваем адрес из справочника на слова
+            ref_words = set(ref_addr.upper().split())
+            print(f"Слова в адресе из справочника: {ref_words}")
+            
+            # Находим общие слова
+            common_words = address_words.intersection(ref_words)
+            print(f"Общие слова: {common_words}")
+            
+            if common_words:
+                # Вычисляем оценку совпадения
+                # Базовый вес за каждое совпадающее слово
+                score = len(common_words) * 2
+                
+                # Дополнительный вес за совпадение порядка слов
+                address_list = normalized_address.upper().split()
+                ref_list = ref_addr.upper().split()
+                
+                # Проверяем совпадение порядка слов
+                for i in range(min(len(address_list), len(ref_list))):
+                    if address_list[i] == ref_list[i]:
+                        score += 1
+                
+                # Дополнительный вес за совпадение начала адреса
+                if address_list and ref_list and address_list[0] == ref_list[0]:
+                    score += 2
+                
+                # Дополнительный вес за совпадение конца адреса
+                if address_list and ref_list and address_list[-1] == ref_list[-1]:
+                    score += 2
+                
+                # Дополнительный вес за совпадение длины адреса
+                if len(address_list) == len(ref_list):
+                    score += 1
+                
+                print(f"Оценка совпадения: {score}")
+                
+                if score > best_score:
+                    best_score = score
+                    best_match = ref_addr
+                    print(f"Новый лучший вариант: {best_match} (оценка: {best_score})")
+        
+        print(f"\nИтоговый результат: {best_match} (оценка: {best_score})")
+        return best_match
+
     def _normalize_address(self, address: str) -> str:
         """Нормализует адрес для поиска.
         
@@ -421,50 +652,48 @@ class ImprovedDatabaseOutputWorker(OutputWorker):
                 address = address[len(prefix):].strip()
                 break
         print(f"После удаления префиксов: {address}")
-                
-        # Специальные правила для составных имен
-        special_rules = {
-            'ОКИНИНА': 'ПАРТИЗАНА ОКИНИНА',
-            'БЕЛЯЕВА': 'КОСМОНАВТА БЕЛЯЕВА',
-            'ЛИБКНЕХТА': 'КАРЛА ЛИБКНЕХТА',
-            'ЛЮКСЕМБУРГ': 'РОЗЫ ЛЮКСЕМБУРГ',
-            'РОЗЫ': 'РОЗЫ ЛЮКСЕМБУРГ',
-            'ГОРЬКОГО': 'МАКСИМА ГОРЬКОГО',
-            'БЕЛОВА': 'ГЕНЕРАЛА БЕЛОВА',
-            'ТРУБИЦЫНА': 'ПРОТОИЕРЕЯ ГЕОРГИЯ ТРУБИЦЫНА'
-        }
         
         # Разбиваем адрес на части
         parts = address.split()
         print(f"Части адреса: {parts}")
         
-        # Создаем новый список для результата
-        result_parts = []
+        # Если адрес состоит только из номера дома, возвращаем как есть
+        if len(parts) == 1 and parts[0].isdigit():
+            return address
+            
+        # Получаем номер дома (последнее число в адресе)
+        house_number = None
+        for part in reversed(parts):
+            if part.isdigit():
+                house_number = part
+                break
+                
+        # Убираем номер дома из адреса для обработки
+        if house_number:
+            address = ' '.join(part for part in parts if part != house_number)
+            print(f"Адрес без номера дома: {address}")
         
-        # Обрабатываем каждую часть
-        i = 0
-        while i < len(parts):
-            current_word = parts[i]
-            print(f"\nОбработка слова: {current_word}")
-            
-            # Проверяем, есть ли это слово в правилах
-            if current_word in special_rules:
-                print(f"Найдено правило для слова {current_word}")
-                # Проверяем, не является ли это частью уже замененного имени
-                if not any(special_rules[current_word] in ' '.join(result_parts)):
-                    print(f"Применяем правило: {current_word} -> {special_rules[current_word]}")
-                    result_parts.append(special_rules[current_word])
-                else:
-                    print(f"Пропускаем замену, так как это часть уже замененного имени")
-                    result_parts.append(current_word)
-            else:
-                print(f"Правило не найдено, оставляем как есть")
-                result_parts.append(current_word)
-            
-            i += 1
+        # Проверяем каждое слово в адресе
+        result_parts = []
+        for part in address.split():
+            found_rule = False
+            for old, new in self.SPECIAL_RULES.items():
+                if old in part:
+                    print(f"Найдено правило для слова {part}: {new}")
+                    result_parts.append(new)
+                    found_rule = True
+                    break
+            if not found_rule:
+                print(f"Правило не найдено для слова {part}, оставляем как есть")
+                result_parts.append(part)
         
         # Собираем адрес обратно
         normalized_address = ' '.join(result_parts)
+        
+        # Добавляем номер дома обратно, если он был
+        if house_number:
+            normalized_address = f"{normalized_address} {house_number}"
+            
         print(f"Итоговый нормализованный адрес: {normalized_address}")
         
         return normalized_address 

@@ -95,51 +95,79 @@ def process(addres: str, exceptions_manager=None) -> tuple[Address, Any | None, 
         tuple[Address, Any | None, str]: (адрес, ключ, сообщение)
     """
     raw = str(addres) if str(addres) !='nan' else None
-    print(f"Обработка адреса: {raw}")  # Отладочная информация
+    print(f"\n{'='*50}")
+    print(f"НАЧАЛО ОБРАБОТКИ АДРЕСА")
+    print(f"Исходный адрес: {raw}")
+    print(f"{'='*50}")
     
     # Сначала проверяем в исключениях
     if exceptions_manager:
         key, message = exceptions_manager.get_key(raw)
-        print(f"Проверка в исключениях: key={key}, message={message}")  # Отладочная информация
+        print(f"\nПроверка в исключениях:")
+        print(f"  - Ключ: {key}")
+        print(f"  - Сообщение: {message}")
+        
         if key is not None:
             # Если адрес найден в исключениях, получаем правильный адрес
             correct_address = exceptions_manager.get_correct_address(raw)
-            print(f"Правильный адрес из исключений: {correct_address}")  # Отладочная информация
+            print(f"\nНайден в исключениях:")
+            print(f"  - Правильный адрес: {correct_address}")
+            
             if correct_address:
                 try:
                     # Создаем новый адрес из правильного варианта
                     addr = Address.fromStr(correct_address)
-                    print(f"Создан адрес из правильного варианта: {addr}")  # Отладочная информация
+                    print(f"\nСоздан адрес из правильного варианта:")
+                    print(f"  - Улица: {addr.street}")
+                    print(f"  - Дом: {addr.house}")
+                    print(f"  - Квартира: {addr.flat}")
                     
                     # Сохраняем номер квартиры из исходного адреса, если возможно
                     try:
                         original_addr = Address.fromStr(raw)
                         addr.flat = original_addr.flat
+                        print(f"  - Квартира после обновления: {addr.flat}")
                     except Exception as e:
-                        print(f"Не удалось получить квартиру из исходного адреса: {str(e)}")  # Отладочная информация
-                        # Продолжаем работу без установки квартиры
+                        print(f"  - Не удалось получить квартиру из исходного адреса: {str(e)}")
                     
-                    print(f"Итоговый адрес: {addr}")  # Отладочная информация
+                    print(f"\nИтоговый адрес из исключений: {addr}")
                     return addr, key, ""
                 except Exception as e:
-                    print(f"Ошибка при обработке правильного адреса: {str(e)}")  # Отладочная информация
+                    print(f"\nОшибка при обработке правильного адреса: {str(e)}")
                     return None, None, f"Ошибка при обработке правильного адреса: {str(e)}"
         elif message == "адрес не существует":
-            # Если адрес помечен как несуществующий
+            print(f"\nАдрес помечен как несуществующий")
             return None, None, message
     
     # Если адрес не найден в исключениях или произошла ошибка, ищем в справочнике
     try:
-        addr = Address.fromStr(raw)
-        print(f"Создан адрес из справочника: {addr}")  # Отладочная информация
+        print(f"\nПоиск в справочнике:")
+        
+        # Создаем временный объект ImprovedDatabaseOutputWorker для расширения адреса
+        temp_worker = ImprovedDatabaseOutputWorker(None, None, None, None)
+        expanded_address = temp_worker._expand_address_with_rules(raw)
+        print(f"  - Расширенный адрес: {expanded_address}")
+        
+        addr = Address.fromStr(expanded_address)
+        print(f"  - Создан адрес из справочника: {addr}")
+        print(f"  - Улица: {addr.street}")
+        print(f"  - Дом: {addr.house}")
+        print(f"  - Квартира: {addr.flat}")
+        
         key = linker.link(addr, require_flat_check=True)
+        print(f"  - Найден ключ: {key}")
+        
         addr1 = linker.getvalue(key)
         addr1.flat = addr.flat
-        print(f"Итоговый адрес из справочника: {addr1}")  # Отладочная информация
+        print(f"\nИтоговый адрес из справочника:")
+        print(f"  - Улица: {addr1.street}")
+        print(f"  - Дом: {addr1.house}")
+        print(f"  - Квартира: {addr1.flat}")
+        print(f"  - Ключ: {key}")
+        
         return addr1, key, ""
     except Exception as e:
-        print(f"Ошибка при обработке адреса из справочника: {str(e)}")  # Отладочная информация
-        # Если адрес не найден ни в справочнике, ни в исключениях
+        print(f"\nОшибка при обработке адреса из справочника: {str(e)}")
         return None, None, "адрес не найден"
 
 
@@ -189,15 +217,18 @@ def process_excel(input_path: str, input_sheet: str, address_name: str, output_p
                         data['note'] = message
                         stats.add_failure(data['raw'], Exception(message))
                     elif data['address'] is None or data['key'] is None:
+                        data['note'] = "Адрес не был распознан"
                         stats.add_failure(data['raw'], Exception("Адрес не был распознан"))
                     else:
                         stats.add_success()
-                    yield AddressDTO(**data)
                 except Exception as e:
+                    data['note'] = str(e)
                     stats.add_failure(data['raw'], e)
                     if error_mode == ErrorHandlingMode.STOP:
                         raise e
-                    continue
+                
+                # Всегда возвращаем DTO, даже если адрес не распознан
+                yield AddressDTO(**data)
         
         outputWorker.save(parse())
     except Exception as e:

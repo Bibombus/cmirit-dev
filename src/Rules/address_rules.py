@@ -199,6 +199,18 @@ PERSON = rule(
     )
 )
 
+# Специальные префиксы
+SPECIAL_PREFIX = dictionary({
+    "имени", "им", "протоиерея", "партизана", "космонавта", 
+    "карла", "розы", "максима", "командарма", "сергея",
+    "городского", "набережная", "соловецких", "подстанции"
+})
+
+# Специальные префиксы территории
+TERRITORY_PREFIX = dictionary({
+    "тер.", "территория", "территор", "тер"
+})
+
 # Предикат. Не является каким то ключевым словом (типом улицы, др вспомогательным словом)
 NOT_STREET_TYPE_OR_OTHER_KEYWORD = not_(
     or_(
@@ -236,6 +248,16 @@ STREET_NAME = rule(
         rule(ADJF_BUT_NO_STREET_TYPE),
         ANUM,
         PERSON,
+        # Правила для составных названий объектов
+        rule(NOUN_BUT_NO_STREET_TYPE, ADJF_BUT_NO_STREET_TYPE),
+        rule(ADJF_BUT_NO_STREET_TYPE, NOUN_BUT_NO_STREET_TYPE),
+        # Добавляем правила для составных названий с префиксом "ИМЕНИ"
+        rule(IMENI, SPECIAL_PREFIX, NOUN_BUT_NO_STREET_TYPE),
+        rule(IMENI, SPECIAL_PREFIX, ADJF_BUT_NO_STREET_TYPE),
+        rule(IMENI, SPECIAL_PREFIX, NOUN_BUT_NO_STREET_TYPE, NOUN_BUT_NO_STREET_TYPE),
+        rule(IMENI, SPECIAL_PREFIX, ADJF_BUT_NO_STREET_TYPE, NOUN_BUT_NO_STREET_TYPE),
+        rule(IMENI, SPECIAL_PREFIX, NOUN_BUT_NO_STREET_TYPE, ADJF_BUT_NO_STREET_TYPE),
+        rule(IMENI, SPECIAL_PREFIX, ADJF_BUT_NO_STREET_TYPE, ADJF_BUT_NO_STREET_TYPE),
     )
 ).interpretation(StreetFact.Name)
 
@@ -246,6 +268,8 @@ STREET = (
             rule(TYPE.interpretation(StreetFact.Type), STREET_NAME),
             rule(STREET_NAME),
             rule(STREET_NAME, TYPE.interpretation(StreetFact.Type)),
+            # Добавляем правило для территорий
+            rule(TERRITORY_PREFIX, STREET_NAME),
         )
     )
     .interpretation(StreetFact)
