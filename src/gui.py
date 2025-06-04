@@ -20,6 +20,7 @@ from .OutputWorker.outputWorker import LoggersCollection as logger
 import time
 
 from .db_connection_manager import DBConnectionManager, ConnectionParams
+from src.exceptions_manager import ExceptionsManager
 
 def make_field_frame(parent: Widget, label: str) -> Entry:
     """Создает фрейм и вложенные в него однострочное поле для ввода и подпись к нему (слева от поля).
@@ -364,7 +365,7 @@ class ExcelFileFrame(ProcessFrame):
         args = {
             'input_path': self.path_entry.get(),
             'input_sheet': self.sheet_entry.get(),
-            'id_name': self.id_entry.get() if self.id_entry.get().strip() != '' else None,
+            'identity_column_name': self.id_entry.get() if self.id_entry.get().strip() != '' else None,
             'address_name': self.address_entry.get(),
             'output_path': self.output_path_entry.get(),
             'error_mode': ErrorHandlingMode(self.error_mode_var.get())

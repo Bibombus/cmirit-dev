@@ -47,6 +47,14 @@ def make_args_parser() -> argparse.ArgumentParser:
             'required': False,
             'help': 'Необходимо ли выводить информацию о ходе работы в консоль. По умолчанию - нет.'
         },
+        {
+            'short': '-s',
+            'full': '--skip_errors',
+            'action': 'store_true',
+            'default': False,
+            'required': False,
+            'help': 'Пропускать ошибки при обработке адресов. По умолчанию - останавливаться при ошибке.'
+        }
     ]
 
 

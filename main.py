@@ -19,6 +19,7 @@ from src.OutputWorker import SingleTableExcelOutputWorker, AddressDTO, LoggersCo
 from src.OutputWorker.outputWorker import DatabaseOutputWorker
 from src.args import make_args_parser
 from src import gui
+from src.exceptions_manager import ExceptionsManager
 
 linker: Linker | None = None
 logger: LoggersCollection | None
@@ -61,7 +62,9 @@ def make_logger():
         os.makedirs(logsdir)
     logfilename = os.path.join(logsdir, logfilename)
     global logger
-    logger = LoggersCollection([open(logfilename, 'w', encoding="utf-8")])
+    log_file = open(logfilename, 'w', encoding="utf-8")
+    logger = LoggersCollection([log_file])
+    logger.write(f"=== Начало работы программы {datetime.datetime.now()} ===\n")
 
     if args.verbose:
         logger.append(sys.stdout)
@@ -95,90 +98,63 @@ def process(addres: str, exceptions_manager=None) -> tuple[Address, Any | None, 
         tuple[Address, Any | None, str]: (адрес, ключ, сообщение)
     """
     raw = str(addres) if str(addres) !='nan' else None
-    print(f"\n{'='*50}")
-    print(f"НАЧАЛО ОБРАБОТКИ АДРЕСА")
-    print(f"Исходный адрес: {raw}")
-    print(f"{'='*50}")
     
     # Сначала проверяем в исключениях
     if exceptions_manager:
         key, message = exceptions_manager.get_key(raw)
-        print(f"\nПроверка в исключениях:")
-        print(f"  - Ключ: {key}")
-        print(f"  - Сообщение: {message}")
         
         if key is not None:
             # Если адрес найден в исключениях, получаем правильный адрес
             correct_address = exceptions_manager.get_correct_address(raw)
-            print(f"\nНайден в исключениях:")
-            print(f"  - Правильный адрес: {correct_address}")
             
             if correct_address:
                 try:
                     # Создаем новый адрес из правильного варианта
                     addr = Address.fromStr(correct_address)
-                    print(f"\nСоздан адрес из правильного варианта:")
-                    print(f"  - Улица: {addr.street}")
-                    print(f"  - Дом: {addr.house}")
-                    print(f"  - Квартира: {addr.flat}")
                     
                     # Сохраняем номер квартиры из исходного адреса, если возможно
                     try:
                         original_addr = Address.fromStr(raw)
                         addr.flat = original_addr.flat
-                        print(f"  - Квартира после обновления: {addr.flat}")
-                    except Exception as e:
-                        print(f"  - Не удалось получить квартиру из исходного адреса: {str(e)}")
+                    except Exception:
+                        pass
                     
-                    print(f"\nИтоговый адрес из исключений: {addr}")
+                    logger.write(f'Сырой адрес: "{raw}" - Обработанный адрес: "{addr}"\n')
                     return addr, key, "Найден в исключениях"
-                except Exception as e:
-                    print(f"\nОшибка при обработке правильного адреса: {str(e)}")
+                except Exception:
+                    logger.write(f'Сырой адрес: "{raw}" - Нет правильного адреса\n')
                     return None, None, "Нет правильного адреса"
         elif message == "адрес не существует":
-            print(f"\nАдрес помечен как несуществующий")
+            logger.write(f'Сырой адрес: "{raw}" - Нет правильного адреса\n')
             return None, None, "Нет правильного адреса"
     
     # Если адрес не найден в исключениях или произошла ошибка, ищем в справочнике
     try:
-        print(f"\nПоиск в справочнике:")
-        
         # Создаем временный объект ImprovedDatabaseOutputWorker для расширения адреса
         temp_worker = ImprovedDatabaseOutputWorker(None, None, None, None)
         expanded_address = temp_worker._expand_address_with_rules(raw)
-        print(f"  - Расширенный адрес: {expanded_address}")
         
         addr = Address.fromStr(expanded_address)
-        print(f"  - Создан адрес из справочника: {addr}")
-        print(f"  - Улица: {addr.street}")
-        print(f"  - Дом: {addr.house}")
-        print(f"  - Квартира: {addr.flat}")
-        
         key = linker.link(addr, require_flat_check=True)
-        print(f"  - Найден ключ: {key}")
         
         addr1 = linker.getvalue(key)
         addr1.flat = addr.flat
-        print(f"\nИтоговый адрес из справочника:")
-        print(f"  - Улица: {addr1.street}")
-        print(f"  - Дом: {addr1.house}")
-        print(f"  - Квартира: {addr1.flat}")
-        print(f"  - Ключ: {key}")
         
+        logger.write(f'Сырой адрес: "{raw}" - Обработанный адрес: "{addr1}"\n')
         return addr1, key, ""
-    except Exception as e:
-        print(f"\nОшибка при обработке адреса из справочника: {str(e)}")
+    except Exception:
+        logger.write(f'Сырой адрес: "{raw}" - Нет правильного адреса\n')
         return None, None, "Нет правильного адреса"
 
 
-def process_excel(input_path: str, input_sheet: str, address_name: str, output_path: str, id_name: str | None = None, error_mode: ErrorHandlingMode = ErrorHandlingMode.STOP, progress_callback=None, exceptions_manager=None) -> ProcessingStats:
+def process_excel(input_path: str, input_sheet: str, address_name: str, output_path: str, identity_column_name: str | None = None, error_mode: ErrorHandlingMode = ErrorHandlingMode.STOP, progress_callback=None, exceptions_manager=None) -> ProcessingStats:
     stats = ProcessingStats()
     
     try:
         # Читаем только нужные колонки
         usecols = [address_name]
-        if id_name is not None:
-            usecols.append(id_name)
+        if identity_column_name is not None:
+            usecols.append(identity_column_name)
         input_file = pd.read_excel(input_path, input_sheet, usecols=usecols)
     except Exception as e:
         logger.write("Работа с файлом адресов не удалась.\n")
@@ -207,8 +183,8 @@ def process_excel(input_path: str, input_sheet: str, address_name: str, output_p
                     'note': None
                 }
 
-                if id_name is not None:
-                    data[id_name] = row[id_name]
+                if identity_column_name is not None:
+                    data[identity_column_name] = row[identity_column_name]
                 
                 data['raw'] = row[address_name]
                 try:
@@ -467,9 +443,45 @@ if __name__ == "__main__":
     args = p.parse_args()
 
     make_logger()
-    init_linker()
-    if args.gui:
-        app = gui.make_gui(logger, process_excel, process_db, make_engine, check_connection)
-        app.mainloop()
-    else:
-        print('Консольный режим временно отключен.')
+    logger.write("Инициализация программы...\n")
+    
+    try:
+        init_linker()
+        logger.write("Linker успешно инициализирован\n")
+        
+        # Инициализируем менеджер исключений
+        exceptions_manager = ExceptionsManager()
+        
+        if args.gui:
+            logger.write("Запуск в режиме GUI\n")
+            app = gui.make_gui(logger, process_excel, process_db, make_engine, check_connection)
+            app.mainloop()
+        else:
+            logger.write("Запуск в консольном режиме\n")
+            # Восстанавливаем консольный режим
+            if not args.input_file or not args.output_file:
+                logger.write("ОШИБКА: Для консольного режима необходимо указать входной и выходной файлы\n")
+                sys.exit(1)
+                
+            try:
+                logger.write(f"Обработка файла {args.input_file}...\n")
+                stats = process_excel(
+                    args.input_file,
+                    args.input_sheet_name,
+                    args.input_column_name,
+                    args.output_file,
+                    args.identity_column_name,
+                    ErrorHandlingMode.SKIP if args.skip_errors else ErrorHandlingMode.STOP,
+                    exceptions_manager=exceptions_manager  # Передаем менеджер исключений
+                )
+                logger.write(stats.get_summary() + "\n")
+                if stats.failed > 0:
+                    error_file = f"errors_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                    stats.export_errors(error_file)
+                    logger.write(f"Ошибки сохранены в файл: {error_file}\n")
+            except Exception as e:
+                logger.write(f"ОШИБКА при обработке файла: {str(e)}\n")
+                sys.exit(1)
+    except Exception as e:
+        logger.write(f"КРИТИЧЕСКАЯ ОШИБКА: {str(e)}\n")
+        sys.exit(1)

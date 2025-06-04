@@ -23,17 +23,34 @@ from ..AddresInfo import Address
 class LoggersCollection(list):
     """Позволяет одновременно писать логи в несколько источников. Для добавления нового источника используется стандартный интерфейс списка."""
 
+    def write(self, message: str):
+        """Записывает сообщение во все источники логирования.
+        
+        Args:
+            message (str): Сообщение для записи.
+        """
+        for obj in self:
+            if hasattr(obj, 'write'):
+                obj.write(message)
+            elif hasattr(obj, 'append'):
+                obj.append(message)
+
+    def flush(self):
+        """Вызывает flush для всех источников логирования."""
+        for obj in self:
+            if hasattr(obj, 'flush'):
+                obj.flush()
+
     def __getattr__(self, attr: str):
         """Получение атрибута по его имени. Используется для выполнения операций записи логов во все места, имеющие единый интерфейс сразу.
 
         Args:
             attr (str): Название аттрибута (метода).
         """
-
         def func(*args, **kwargs):
             for obj in self:
-                getattr(obj, attr)(*args, **kwargs)
-
+                if hasattr(obj, attr):
+                    getattr(obj, attr)(*args, **kwargs)
         return func
 
 
@@ -538,3 +555,124 @@ class DatabaseOutputWorker(OutputWorker):
         except Exception as e:
             self.logger.write(f"Ошибка при сохранении результатов: {str(e)}\n")
             raise e
+
+    def _expand_address_with_rules(self, address: str) -> str:
+        """Расширяет адрес с помощью правил."""
+        print("\n" + "="*50)
+        print("РАСШИРЕНИЕ АДРЕСА С ПОМОЩЬЮ ПРАВИЛ")
+        print(f"Исходный адрес: {address}")
+        print("="*50 + "\n")
+
+        # Приводим к верхнему регистру
+        address = address.upper()
+        print("После приведения к верхнему регистру:")
+        print(f"  - Адрес: {address}")
+
+        # Заменяем сокращения
+        for old, new in self.replacements.items():
+            if old in address:
+                print(f"  - Замена '{old}' на '{new}'")
+                address = address.replace(old, new)
+
+        print("После замены сокращений:")
+        print(f"  - Адрес: {address}\n")
+
+        # Разбиваем адрес на части
+        parts = address.split()
+        print("Части адреса:")
+        print(f"  - {parts}\n")
+
+        # Извлекаем номер дома
+        house_number = None
+        for i, part in enumerate(parts):
+            if part.replace('/', '').replace('К', '').replace('СТР.', '').replace('С', '').replace('А', '').replace('Б', '').replace('В', '').replace('Г', '').replace('Д', '').replace('Е', '').replace('Ж', '').replace('З', '').replace('И', '').replace('К', '').replace('Л', '').replace('М', '').replace('Н', '').replace('О', '').replace('П', '').replace('Р', '').replace('С', '').replace('Т', '').replace('У', '').replace('Ф', '').replace('Х', '').replace('Ц', '').replace('Ч', '').replace('Ш', '').replace('Щ', '').replace('Ъ', '').replace('Ы', '').replace('Ь', '').replace('Э', '').replace('Ю', '').replace('Я', '').isdigit():
+                house_number = part
+                parts.pop(i)
+                break
+
+        if house_number:
+            print(f"Номер дома: {house_number}")
+            print("Адрес без номера дома:")
+            print(f"  - {' '.join(parts)}\n")
+
+        # Проверяем префиксы территории
+        print("Проверка префиксов территории:")
+        print(f"  - Доступные префиксы: {list(self.territory_prefixes.keys())}")
+        print(f"  - Текущий адрес: '{' '.join(parts)}'")
+
+        is_territory = False
+        for prefix in self.territory_prefixes:
+            if parts and parts[0] == prefix:
+                is_territory = True
+                print(f"  - Найден префикс территории: True\n")
+                print("Обнаружен префикс территории:")
+                print(f"  - Префикс: {prefix}")
+                parts.pop(0)  # Удаляем префикс
+                print(f"  - Адрес без префикса: {' '.join(parts)}\n")
+                break
+        else:
+            print(f"  - Найден префикс территории: False\n")
+
+        # Применяем специальные правила
+        print("Применение специальных правил:")
+        expanded_parts = []
+        processed_indices = set()  # Множество для отслеживания обработанных индексов
+        
+        # Сначала проверяем все возможные составные слова
+        i = 0
+        while i < len(parts):
+            if i in processed_indices:
+                i += 1
+                continue
+                
+            # Проверяем составные слова разной длины
+            found_compound = False
+            for length in range(min(3, len(parts) - i), 0, -1):  # Проверяем последовательности от 3 до 1 слова
+                compound_word = ' '.join(parts[i:i+length])
+                if compound_word in self.special_rules:
+                    print(f"  - Найдено составное слово: '{compound_word}'")
+                    expanded = self.special_rules[compound_word]
+                    print(f"    - Применяем правило: '{expanded}'")
+                    expanded_parts.append(expanded)
+                    # Отмечаем все слова из составного как обработанные
+                    for j in range(i, i + length):
+                        processed_indices.add(j)
+                    i += length  # Пропускаем все слова из составного
+                    found_compound = True
+                    break
+            
+            if not found_compound:
+                # Если составное слово не найдено, проверяем одиночное слово
+                part = parts[i]
+                print(f"  - Проверка слова: '{part}'")
+                if part in self.special_rules:
+                    expanded = self.special_rules[part]
+                    print(f"    - Найдено правило для слова '{part}': '{expanded}'")
+                    # Проверяем, не содержится ли уже это слово в предыдущих частях
+                    if not any(expanded in prev for prev in expanded_parts):
+                        expanded_parts.append(expanded)
+                    else:
+                        print(f"    - Слово '{expanded}' уже присутствует в адресе, пропускаем")
+                        expanded_parts.append(part)
+                else:
+                    print(f"    - Правило не найдено для слова '{part}', оставляем как есть")
+                    expanded_parts.append(part)
+                processed_indices.add(i)
+                i += 1
+
+        # Если это территория, добавляем префикс обратно
+        if is_territory:
+            print("\nДобавлен префикс территории обратно:")
+            print(f"  - Адрес с префиксом: {list(self.territory_prefixes.keys())[0]} {' '.join(expanded_parts)}")
+            expanded_parts.insert(0, list(self.territory_prefixes.keys())[0])
+
+        # Собираем адрес обратно
+        result = ' '.join(expanded_parts)
+        if house_number:
+            result += f" {house_number}"
+
+        print("\nИтоговый расширенный адрес:")
+        print(f"  - {result}")
+        print("="*50 + "\n")
+
+        return result

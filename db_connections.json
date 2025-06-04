@@ -99,6 +99,15 @@
         "port": "5435",
         "db_name": "postgres",
         "schema": "public"
+      },
+      {
+        "dbms": "PostgreSQL",
+        "user": "postgres",
+        "password_hash": "81dc9bdb52d04dc20036dbd8313ed055",
+        "host": "localhost",
+        "port": "5435",
+        "db_name": "postgres",
+        "schema": "public"
       }
     ],
     "user": [
