@@ -8,36 +8,17 @@ def make_args_parser() -> argparse.ArgumentParser:
         argparse.ArgumentParser: Готовый ко использованию парсер параметров.
     """
 
+    p = argparse.ArgumentParser(description='Программа для разбора и определения адреса (по г. Череповец).')
+
     # Общие параметры
-    general_params = [
-        {
-            'short': '-id_name',
-            'full': '--identity_column_name',
-            'default': None,
-            'required': False,
-            'help': 'Название ключевого столбца во входных данных. Если не указан, то будет обработан лишь столбец с адресами.'
-        },
+    common_params = [
         {
             'short': '-g',
             'full': '--gui',
             'action': 'store_true',
             'default': False,
             'required': False,
-            'help': 'Запуск программы с графической оболочкой.'
-        },
-        {
-            'short': '-db_file',
-            'full': '--db_export_file',
-            'default': "./DB_EXPORT.xlsx",
-            'required': False,
-            'help': 'Путь к excel-файлу выгрузки из БД. По умолчанию - файл "DB_EXPORT.xlsx", находящийся в папке с программой. Возможно указывать путь, относительно данной папки.'
-        },
-        {
-            'short': '-db_sheet_name',
-            'full': '--db_export_sheet_name',
-            'default': "Sheet 1",
-            'required': False,
-            'help': 'Название листа в файле выгрузки из БД. По умолчанию - "Sheet 1".'
+            'help': 'Запустить программу в режиме графического интерфейса. По умолчанию - консольный режим.'
         },
         {
             'short': '-v',
@@ -48,15 +29,20 @@ def make_args_parser() -> argparse.ArgumentParser:
             'help': 'Необходимо ли выводить информацию о ходе работы в консоль. По умолчанию - нет.'
         },
         {
-            'short': '-s',
-            'full': '--skip_errors',
-            'action': 'store_true',
-            'default': False,
+            'short': '-dbf',
+            'full': '--db_export_file',
+            'default': "./DB_EXPORT.xlsx",
             'required': False,
-            'help': 'Пропускать ошибки при обработке адресов. По умолчанию - останавливаться при ошибке.'
+            'help': 'Путь к excel-файлу выгрузки из БД. По умолчанию - файл "DB_EXPORT.xlsx", находящийся в папке с программой.'
+        },
+        {
+            'short': '-dbs',
+            'full': '--db_export_sheet_name',
+            'default': "Sheet 1",
+            'required': False,
+            'help': 'Название листа в файле выгрузки из БД. По умолчанию - "Sheet 1".'
         }
     ]
-
 
     # Параметры для работы с excel-файлами
     excel_file_params = [
@@ -138,14 +124,12 @@ def make_args_parser() -> argparse.ArgumentParser:
         }
     ]
 
-    params = list(general_params)
+    params = list(common_params)
     params.extend(excel_file_params)
     params.extend(db_params)
 
-    parser = argparse.ArgumentParser()
-
     for param in params:
         short, full, = param.pop('short'), param.pop('full')
-        parser.add_argument(short, full, **param)
+        p.add_argument(short, full, **param)
 
-    return parser
+    return p

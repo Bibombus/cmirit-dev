@@ -26,10 +26,6 @@ logger: LoggersCollection | None
 args: argparse.Namespace | None = None
 
 
-class ErrorHandlingMode(Enum):
-    SKIP = "skip"  # Пропускать ошибки
-    STOP = "stop"  # Останавливаться при ошибке
-
 class ProcessingStats:
     def __init__(self):
         self.successful = 0
@@ -147,7 +143,7 @@ def process(addres: str, exceptions_manager=None) -> tuple[Address, Any | None, 
         return None, None, "Нет правильного адреса"
 
 
-def process_excel(input_path: str, input_sheet: str, address_name: str, output_path: str, identity_column_name: str | None = None, error_mode: ErrorHandlingMode = ErrorHandlingMode.STOP, progress_callback=None, exceptions_manager=None) -> ProcessingStats:
+def process_excel(input_path: str, input_sheet: str, address_name: str, output_path: str, identity_column_name: str | None = None, progress_callback=None, exceptions_manager=None) -> ProcessingStats:
     stats = ProcessingStats()
     
     try:
@@ -203,8 +199,6 @@ def process_excel(input_path: str, input_sheet: str, address_name: str, output_p
                 except Exception as e:
                     data['note'] = "Нет правильного адреса"
                     stats.add_failure(data['raw'], e)
-                    if error_mode == ErrorHandlingMode.STOP:
-                        raise e
                 
                 # Всегда возвращаем DTO, даже если адрес не распознан
                 yield AddressDTO(**data)
@@ -231,7 +225,7 @@ def make_engine(dbms: str, user: str, password: str, host: str, port: str, db_na
         return engine
 
 
-def process_db(dbms: str, user: str, password: str, host: str, port: str, db_name: str, schema: str, input_table_name: str, id_column: str, address_column: str, output_table_name: str, error_mode: ErrorHandlingMode = ErrorHandlingMode.STOP, progress_callback=None, exceptions_manager=None) -> ProcessingStats:
+def process_db(dbms: str, user: str, password: str, host: str, port: str, db_name: str, schema: str, input_table_name: str, id_column: str, address_column: str, output_table_name: str, progress_callback=None, exceptions_manager=None) -> ProcessingStats:
     stats = ProcessingStats()
     
     try:
@@ -383,8 +377,6 @@ def process_db(dbms: str, user: str, password: str, host: str, port: str, db_nam
                     except Exception as ex:
                         stats.add_failure(str(address) if address is not None else "неизвестный адрес", ex)
                         print(f"Ошибка при обработке строки: {ex}")
-                        if error_mode == ErrorHandlingMode.STOP:
-                            raise ex
                         continue
         except Exception as e:
             logger.write("Не удалось прочитать данные из БД.")
@@ -471,8 +463,7 @@ if __name__ == "__main__":
                     args.input_column_name,
                     args.output_file,
                     args.identity_column_name,
-                    ErrorHandlingMode.SKIP if args.skip_errors else ErrorHandlingMode.STOP,
-                    exceptions_manager=exceptions_manager  # Передаем менеджер исключений
+                    exceptions_manager=exceptions_manager
                 )
                 logger.write(stats.get_summary() + "\n")
                 if stats.failed > 0:

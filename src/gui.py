@@ -4,7 +4,7 @@ from datetime import datetime
 import pandas as pd
 import threading
 from sqlalchemy import func, select, MetaData, Table, inspect, text
-from main import make_engine
+from main import make_engine, ProcessingStats
 
 from tkinter import *
 from tkinter import messagebox
@@ -15,7 +15,7 @@ import re
 from tkinter.ttk import Combobox
 
 from .OutputWorker.outputWorker import GUILogger, LoggersCollection
-from main import process_excel, process_db, ErrorHandlingMode, ProcessingStats
+from main import process_excel, process_db
 from .OutputWorker.outputWorker import LoggersCollection as logger
 import time
 
@@ -349,15 +349,6 @@ class ExcelFileFrame(ProcessFrame):
 
         self._create_progress_section()
 
-        # Добавляем выбор режима обработки ошибок
-        error_mode_frame = Frame(self)
-        error_mode_frame.pack(fill=X, padx=5, pady=5, anchor=N)
-
-        Label(error_mode_frame, text="Режим обработки ошибок:").pack(side=LEFT, padx=5)
-        self.error_mode_var = StringVar(value=ErrorHandlingMode.STOP.value)
-        ttk.Radiobutton(error_mode_frame, text="Останавливаться", variable=self.error_mode_var, value=ErrorHandlingMode.STOP.value).pack(side=LEFT, padx=5)
-        ttk.Radiobutton(error_mode_frame, text="Пропускать", variable=self.error_mode_var, value=ErrorHandlingMode.SKIP.value).pack(side=LEFT, padx=5)
-
 
     def _get_args(self) -> dict:
         if not self.validate():
@@ -367,8 +358,7 @@ class ExcelFileFrame(ProcessFrame):
             'input_sheet': self.sheet_entry.get(),
             'identity_column_name': self.id_entry.get() if self.id_entry.get().strip() != '' else None,
             'address_name': self.address_entry.get(),
-            'output_path': self.output_path_entry.get(),
-            'error_mode': ErrorHandlingMode(self.error_mode_var.get())
+            'output_path': self.output_path_entry.get()
         }
         return args
 
@@ -812,15 +802,6 @@ class DataBaseFrame(ProcessFrame):
 
         self._create_progress_section()
 
-        # Добавляем выбор режима обработки ошибок
-        error_mode_frame = Frame(self)
-        error_mode_frame.pack(fill=X, padx=5, pady=5, anchor=N)
-
-        Label(error_mode_frame, text="Режим обработки ошибок:").pack(side=LEFT, padx=5)
-        self.error_mode_var = StringVar(value=ErrorHandlingMode.STOP.value)
-        ttk.Radiobutton(error_mode_frame, text="Останавливаться", variable=self.error_mode_var, value=ErrorHandlingMode.STOP.value).pack(side=LEFT, padx=5)
-        ttk.Radiobutton(error_mode_frame, text="Пропускать", variable=self.error_mode_var, value=ErrorHandlingMode.SKIP.value).pack(side=LEFT, padx=5)
-
     
     def _get_args(self) -> dict:
         """Возвращает все параметры, введенные пользователем в интерфейсе."""
@@ -835,8 +816,7 @@ class DataBaseFrame(ProcessFrame):
             'input_table_name': self.input_table_name_entry.get(),
             'id_column': self.id_entry.get().strip() if self.id_entry.get().strip() != '' else None,
             'address_column': self.address_entry.get(),
-            'output_table_name': self.output_table_entry.get(),
-            'error_mode': ErrorHandlingMode(self.error_mode_var.get())
+            'output_table_name': self.output_table_entry.get()
         }
         return args
 
