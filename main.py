@@ -118,11 +118,11 @@ def process(addres: str, exceptions_manager=None) -> tuple[Address, Any | None, 
                     logger.write(f'Сырой адрес: "{raw}" - Обработанный адрес: "{addr}"\n')
                     return addr, key, "Найден в исключениях"
                 except Exception:
-                    logger.write(f'Сырой адрес: "{raw}" - Нет правильного адреса\n')
-                    return None, None, "Нет правильного адреса"
+                    logger.write(f'Сырой адрес: "{raw}" - Адрес не существует\n')
+                    return None, None, "Адрес не существует"
         elif message == "адрес не существует":
-            logger.write(f'Сырой адрес: "{raw}" - Нет правильного адреса\n')
-            return None, None, "Нет правильного адреса"
+            logger.write(f'Сырой адрес: "{raw}" - Адрес не существует\n')
+            return None, None, "Адрес не существует"
     
     # Если адрес не найден в исключениях или произошла ошибка, ищем в справочнике
     try:
@@ -133,14 +133,24 @@ def process(addres: str, exceptions_manager=None) -> tuple[Address, Any | None, 
         addr = Address.fromStr(expanded_address)
         key = linker.link(addr, require_flat_check=True)
         
+        if key is None:
+            logger.write(f'Сырой адрес: "{raw}" - Адрес не существует\n')
+            return addr, None, "Адрес не существует"
+            
         addr1 = linker.getvalue(key)
         addr1.flat = addr.flat
         
         logger.write(f'Сырой адрес: "{raw}" - Обработанный адрес: "{addr1}"\n')
         return addr1, key, ""
     except Exception:
-        logger.write(f'Сырой адрес: "{raw}" - Нет правильного адреса\n')
-        return None, None, "Нет правильного адреса"
+        try:
+            # Пытаемся разобрать адрес даже если не нашли соответствие
+            addr = Address.fromStr(raw)
+            logger.write(f'Сырой адрес: "{raw}" - Адрес не существует\n')
+            return addr, None, "Адрес не существует"
+        except Exception:
+            logger.write(f'Сырой адрес: "{raw}" - Адрес не существует\n')
+            return None, None, "Адрес не существует"
 
 
 def process_excel(input_path: str, input_sheet: str, address_name: str, output_path: str, identity_column_name: str | None = None, progress_callback=None, exceptions_manager=None) -> ProcessingStats:
@@ -185,19 +195,19 @@ def process_excel(input_path: str, input_sheet: str, address_name: str, output_p
                 data['raw'] = row[address_name]
                 try:
                     data['address'], data['key'], message = process(data['raw'], exceptions_manager)
-                    if message == "Нет правильного адреса":
+                    if message == "Адрес не существует":
                         data['note'] = message
                         stats.add_failure(data['raw'], Exception(message))
                     elif message == "Найден в исключениях":
                         data['note'] = message
                         stats.add_success()
                     elif data['address'] is None or data['key'] is None:
-                        data['note'] = "Нет правильного адреса"
+                        data['note'] = "Адрес не существует"
                         stats.add_failure(data['raw'], Exception("Адрес не был распознан"))
                     else:
                         stats.add_success()
                 except Exception as e:
-                    data['note'] = "Нет правильного адреса"
+                    data['note'] = "Адрес не существует"
                     stats.add_failure(data['raw'], e)
                 
                 # Всегда возвращаем DTO, даже если адрес не распознан
@@ -325,14 +335,14 @@ def process_db(dbms: str, user: str, password: str, host: str, port: str, db_nam
                                 'ID': id_val  # Сохраняем ID
                             }
                             
-                            if message == "Нет правильного адреса":
+                            if message == "Адрес не существует":
                                 data['note'] = message
                                 stats.add_failure(str(address), Exception(message))
                             elif message == "Найден в исключениях":
                                 data['note'] = message
                                 stats.add_success()
                             elif addr is None or key is None:
-                                data['note'] = "Нет правильного адреса"
+                                data['note'] = "Адрес не существует"
                                 stats.add_failure(str(address), Exception("Адрес не был распознан"))
                             else:
                                 stats.add_success()
@@ -358,14 +368,14 @@ def process_db(dbms: str, user: str, password: str, host: str, port: str, db_nam
                                 'key': key
                             }
                             
-                            if message == "Нет правильного адреса":
+                            if message == "Адрес не существует":
                                 data['note'] = message
                                 stats.add_failure(str(address), Exception(message))
                             elif message == "Найден в исключениях":
                                 data['note'] = message
                                 stats.add_success()
                             elif addr is None or key is None:
-                                data['note'] = "Нет правильного адреса"
+                                data['note'] = "Адрес не существует"
                                 stats.add_failure(str(address), Exception("Адрес не был распознан"))
                             else:
                                 stats.add_success()
