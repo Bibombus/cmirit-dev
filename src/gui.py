@@ -272,14 +272,16 @@ class ProcessFrame(Frame):
         self.export_errors_button.pack_forget()
 
     def _export_errors(self):
-        if self.stats and self.stats.failed > 0:
+        if self.stats and (self.stats.unprocessed > 0 or self.stats.unparsed > 0):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             output_path = f"./logs/errors_{timestamp}.csv"
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             with open(output_path, 'w', encoding='utf-8-sig') as f:  # Добавляем BOM для корректного отображения в Excel
-                f.write("Адрес,Ошибка\n")
-                for addr, error in self.stats.failed_addresses:
-                    f.write(f'"{addr}","{error}"\n')
+                f.write("Адрес,Тип ошибки,Ошибка\n")
+                for addr, error in self.stats.unprocessed_addresses:
+                    f.write(f'"{addr}","Необработан","{error}"\n')
+                for addr, error in self.stats.unparsed_addresses:
+                    f.write(f'"{addr}","Неразобран","{error}"\n')
             messagebox.showinfo("Экспорт завершен", f"Ошибки сохранены в файл: {output_path}")
             if hasattr(self.master.master, 'exceptions_manager'):
                 self.master.master.exceptions_manager._load_exceptions()

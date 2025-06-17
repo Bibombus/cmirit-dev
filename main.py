@@ -29,24 +29,32 @@ args: argparse.Namespace | None = None
 class ProcessingStats:
     def __init__(self):
         self.successful = 0
-        self.failed = 0
-        self.failed_addresses = []
+        self.unprocessed = 0  # адреса, которые разобраны, но не найдены в справочнике
+        self.unparsed = 0     # адреса, которые не удалось разобрать
+        self.unprocessed_addresses = []  # список необработанных адресов
+        self.unparsed_addresses = []     # список неразобранных адресов
 
     def add_success(self):
         self.successful += 1
 
-    def add_failure(self, address: str, error: Exception):
-        self.failed += 1
-        self.failed_addresses.append((address, str(error)))
+    def add_unprocessed(self, address: str, error: Exception):
+        self.unprocessed += 1
+        self.unprocessed_addresses.append((address, str(error)))
+
+    def add_unparsed(self, address: str, error: Exception):
+        self.unparsed += 1
+        self.unparsed_addresses.append((address, str(error)))
 
     def get_summary(self) -> str:
-        return f"Результаты обработки:\n✓ Успешно: {self.successful} адресов\n✗ С ошибками: {self.failed} адресов"
+        return f"Результаты обработки:\n✓ Успешно: {self.successful} адресов\n✗ Необработано: {self.unprocessed} адресов\n✗ Неразобрано: {self.unparsed} адресов"
 
     def export_errors(self, output_path: str):
         with open(output_path, 'w', encoding='utf-8') as f:
-            f.write("Адрес,Ошибка\n")
-            for addr, error in self.failed_addresses:
-                f.write(f'"{addr}","{error}"\n')
+            f.write("Адрес,Тип ошибки,Ошибка\n")
+            for addr, error in self.unprocessed_addresses:
+                f.write(f'"{addr}","Необработан","{error}"\n')
+            for addr, error in self.unparsed_addresses:
+                f.write(f'"{addr}","Неразобран","{error}"\n')
 
 
 def make_logger():
@@ -149,8 +157,8 @@ def process(addres: str, exceptions_manager=None) -> tuple[Address, Any | None, 
             logger.write(f'Сырой адрес: "{raw}" - Адрес не существует\n')
             return addr, None, "Адрес не существует"
         except Exception:
-            logger.write(f'Сырой адрес: "{raw}" - Адрес не существует\n')
-            return None, None, "Адрес не существует"
+            logger.write(f'Сырой адрес: "{raw}" - Адрес не разобран\n')
+            return None, None, "Адрес не разобран"
 
 
 def process_excel(input_path: str, input_sheet: str, address_name: str, output_path: str, identity_column_name: str | None = None, progress_callback=None, exceptions_manager=None) -> ProcessingStats:
@@ -197,18 +205,21 @@ def process_excel(input_path: str, input_sheet: str, address_name: str, output_p
                     data['address'], data['key'], message = process(data['raw'], exceptions_manager)
                     if message == "Адрес не существует":
                         data['note'] = message
-                        stats.add_failure(data['raw'], Exception(message))
+                        stats.add_unprocessed(data['raw'], Exception(message))
+                    elif message == "Адрес не разобран":
+                        data['note'] = message
+                        stats.add_unparsed(data['raw'], Exception(message))
                     elif message == "Найден в исключениях":
                         data['note'] = message
                         stats.add_success()
                     elif data['address'] is None or data['key'] is None:
                         data['note'] = "Адрес не существует"
-                        stats.add_failure(data['raw'], Exception("Адрес не был распознан"))
+                        stats.add_unprocessed(data['raw'], Exception("Адрес не был распознан"))
                     else:
                         stats.add_success()
                 except Exception as e:
-                    data['note'] = "Адрес не существует"
-                    stats.add_failure(data['raw'], e)
+                    data['note'] = "Адрес не разобран"
+                    stats.add_unparsed(data['raw'], e)
                 
                 # Всегда возвращаем DTO, даже если адрес не распознан
                 yield AddressDTO(**data)
@@ -240,160 +251,154 @@ def process_db(dbms: str, user: str, password: str, host: str, port: str, db_nam
     
     try:
         engine = make_engine(dbms, user, password, host, port, db_name)
-    except Exception as e:
-        raise Exception(f'Ошибка при установлении подключения к БД. Подробнее: {e}')
-    
-    # Проверка схемы
-    inspector = inspect(engine)
-    schemas = inspector.get_schema_names()
-    print(f"Доступные схемы в БД: {schemas}")
-    
-    if schema not in schemas:
-        raise Exception(f"Схема '{schema}' не найдена в базе данных. Доступные схемы: {schemas}")
-    
-    # Проверка таблицы с учетом регистра
-    tables = inspector.get_table_names(schema=schema)
-    print(f"Доступные таблицы в схеме {schema}: {tables}")
-    
-    if input_table_name.lower() not in [t.lower() for t in tables]:
-        raise Exception(f"Таблица '{input_table_name}' не найдена в схеме '{schema}'. Доступные таблицы: {tables}")
-    
-    # Находим точное имя таблицы с учетом регистра
-    actual_table_name = None
-    for table in tables:
-        if table.lower() == input_table_name.lower():
-            actual_table_name = table
-            break
-    
-    metadata = MetaData(schema=schema)
-    table = Table(actual_table_name, metadata, autoload_with=engine)
-    
-    # Проверяем структуру таблицы
-    print("\nСтруктура таблицы:")
-    for column in table.columns:
-        print(f"  - {column.name} (тип: {column.type})")
-    
-    # Проверяем наличие нужных колонок
-    if address_column not in [c.name for c in table.columns]:
-        raise Exception(f"Колонка '{address_column}' не найдена в таблице. Доступные колонки: {[c.name for c in table.columns]}")
-    
-    if id_column is not None and id_column not in [c.name for c in table.columns]:
-        raise Exception(f"Колонка '{id_column}' не найдена в таблице. Доступные колонки: {[c.name for c in table.columns]}")
-    
-    print(f"\nПараметры обработки:")
-    print(f"  - Таблица: {actual_table_name}")
-    print(f"  - Колонка адреса: {address_column}")
-    print(f"  - Колонка ID: {id_column if id_column else 'не используется'}")
-    print(f"  - Схема: {schema}")
-
-    def generator():
-        try:
-            with engine.connect() as conn:
-                # Выбираем только нужные колонки
-                columns = [table.c[address_column]]
-                if id_column is not None:
-                    # Проверяем существование колонки
-                    try:
-                        columns.append(table.c[id_column])
-                    except KeyError:
-                        print(f"ОШИБКА: Колонка '{id_column}' не найдена в таблице")
-                        print(f"Доступные колонки: {[c.name for c in table.columns]}")
-                        raise Exception(f"Колонка '{id_column}' не найдена в таблице")
-                
-                # Используем серверный курсор для потоковой обработки
-                result = conn.execution_options(stream_results=True).execute(select(*columns))
+        
+        # Проверяем доступность схемы
+        inspector = inspect(engine)
+        schemas = inspector.get_schema_names()
+        print(f"Доступные схемы в БД: {schemas}")
+        
+        if schema not in schemas:
+            raise Exception(f"Схема '{schema}' не найдена в базе данных. Доступные схемы: {schemas}")
+        
+        # Используем схему при создании метаданных
+        metadata = MetaData(schema=schema)
+        
+        # Проверяем существование таблицы
+        tables = inspector.get_table_names(schema=schema)
+        if input_table_name.lower() not in [t.lower() for t in tables]:
+            raise Exception(f"Таблица '{input_table_name}' не найдена в схеме '{schema}'. Доступные таблицы: {tables}")
+        
+        # Находим точное имя таблицы с учетом регистра
+        actual_table_name = None
+        for table in tables:
+            if table.lower() == input_table_name.lower():
+                actual_table_name = table
+                break
+        
+        table = Table(actual_table_name, metadata, autoload_with=engine)
+        
+        # Проверяем наличие нужных колонок
+        if address_column not in [c.name for c in table.columns]:
+            raise Exception(f"Колонка '{address_column}' не найдена в таблице. Доступные колонки: {[c.name for c in table.columns]}")
+        
+        if id_column is not None and id_column not in [c.name for c in table.columns]:
+            raise Exception(f"Колонка '{id_column}' не найдена в таблице. Доступные колонки: {[c.name for c in table.columns]}")
+        
+        print(f"\nПараметры обработки:")
+        print(f"  - Таблица: {actual_table_name}")
+        print(f"  - Колонка адреса: {address_column}")
+        print(f"  - Колонка ID: {id_column if id_column else 'не используется'}")
+        print(f"  - Схема: {schema}")
+        
+        def generator():
+            try:
                 total_processed = 0
                 batch_size = 100
                 
-                for row in result:
-                    total_processed += 1
-                    if progress_callback and total_processed % batch_size == 0:
-                        progress_callback(total_processed)
-                        
-                    try:
-                        if id_column is not None:
-                            # Если есть колонка ID
-                            address, id_val = row  # Меняем порядок - сначала адрес, потом ID
-                            print(f"Обработка строки с адресом={address}, ID={id_val}")
+                # Формируем запрос в зависимости от наличия ID-колонки
+                if id_column is not None:
+                    query = select(table.c[address_column], table.c[id_column])
+                else:
+                    query = select(table.c[address_column])
+                
+                # Выполняем запрос
+                with engine.connect() as conn:
+                    result = conn.execute(query)
+                    
+                    for row in result:
+                        total_processed += 1
+                        if progress_callback and total_processed % batch_size == 0:
+                            progress_callback(total_processed)
                             
-                            # Проверяем, что адрес не пустой
-                            if address is None or str(address).strip() == '':
-                                print(f"Пропуск строки с пустым адресом (ID={id_val})")
-                                continue
+                        try:
+                            if id_column is not None:
+                                # Если есть колонка ID
+                                address, id_val = row  # Меняем порядок - сначала адрес, потом ID
+                                print(f"Обработка строки с адресом={address}, ID={id_val}")
                                 
-                            addr, key, message = process(str(address), exceptions_manager)
-                            
-                            if addr is None:
-                                print(f"Не удалось обработать адрес: {address}")
-                                continue
+                                # Проверяем, что адрес не пустой
+                                if address is None or str(address).strip() == '':
+                                    print(f"Пропуск строки с пустым адресом (ID={id_val})")
+                                    continue
+                                    
+                                addr, key, message = process(str(address), exceptions_manager)
                                 
-                            # Создаем словарь с параметрами для AddressDTO
-                            data = {
-                                'raw': str(address),  # Сохраняем исходный адрес
-                                'address': addr,
-                                'key': key,
-                                'ID': id_val  # Сохраняем ID
-                            }
-                            
-                            if message == "Адрес не существует":
-                                data['note'] = message
-                                stats.add_failure(str(address), Exception(message))
-                            elif message == "Найден в исключениях":
-                                data['note'] = message
-                                stats.add_success()
-                            elif addr is None or key is None:
-                                data['note'] = "Адрес не существует"
-                                stats.add_failure(str(address), Exception("Адрес не был распознан"))
+                                if addr is None:
+                                    print(f"Не удалось обработать адрес: {address}")
+                                    continue
+                                    
+                                # Создаем словарь с параметрами для AddressDTO
+                                data = {
+                                    'raw': str(address),  # Сохраняем исходный адрес
+                                    'address': addr,
+                                    'key': key,
+                                    'ID': id_val  # Сохраняем ID
+                                }
+                                
+                                if message == "Адрес не существует":
+                                    data['note'] = message
+                                    stats.add_unprocessed(str(address), Exception(message))
+                                elif message == "Адрес не разобран":
+                                    data['note'] = message
+                                    stats.add_unparsed(str(address), Exception(message))
+                                elif message == "Найден в исключениях":
+                                    data['note'] = message
+                                    stats.add_success()
+                                elif addr is None or key is None:
+                                    data['note'] = "Адрес не существует"
+                                    stats.add_unprocessed(str(address), Exception("Адрес не был распознан"))
+                                else:
+                                    stats.add_success()
+                                    
+                                print(f"Данные для AddressDTO: {data}")
+                                dto = AddressDTO(**data)
+                                print(f"Созданный объект DTO: {dto.__dict__}")
                             else:
-                                stats.add_success()
+                                # Если колонки ID нет
+                                address = row[0]
+                                print(f"Обработка строки с адресом: {address}")
                                 
-                            print(f"Данные для AddressDTO: {data}")
-                            dto = AddressDTO(**data)
-                            print(f"Созданный объект DTO: {dto.__dict__}")
-                        else:
-                            # Если колонки ID нет
-                            address = row[0]
-                            print(f"Обработка строки с адресом: {address}")
-                            
-                            # Проверяем, что адрес не пустой
-                            if address is None or str(address).strip() == '':
-                                print(f"Пропуск строки с пустым адресом")
-                                continue
+                                # Проверяем, что адрес не пустой
+                                if address is None or str(address).strip() == '':
+                                    print(f"Пропуск строки с пустым адресом")
+                                    continue
+                                    
+                                addr, key, message = process(str(address), exceptions_manager)
                                 
-                            addr, key, message = process(str(address), exceptions_manager)
-                            
-                            data = {
-                                'raw': str(address),  # Сохраняем исходный адрес
-                                'address': addr,
-                                'key': key
-                            }
-                            
-                            if message == "Адрес не существует":
-                                data['note'] = message
-                                stats.add_failure(str(address), Exception(message))
-                            elif message == "Найден в исключениях":
-                                data['note'] = message
-                                stats.add_success()
-                            elif addr is None or key is None:
-                                data['note'] = "Адрес не существует"
-                                stats.add_failure(str(address), Exception("Адрес не был распознан"))
-                            else:
-                                stats.add_success()
+                                data = {
+                                    'raw': str(address),  # Сохраняем исходный адрес
+                                    'address': addr,
+                                    'key': key
+                                }
                                 
-                            dto = AddressDTO(**data)
-                        
-                        print(f"Обработка записи: raw={dto.raw}, key={dto.key}")
-                        yield dto
-                    except Exception as ex:
-                        stats.add_failure(str(address) if address is not None else "неизвестный адрес", ex)
-                        print(f"Ошибка при обработке строки: {ex}")
-                        continue
-        except Exception as e:
-            logger.write("Не удалось прочитать данные из БД.")
-            logger.write(str(e))
-            raise e
+                                if message == "Адрес не существует":
+                                    data['note'] = message
+                                    stats.add_unprocessed(str(address), Exception(message))
+                                elif message == "Адрес не разобран":
+                                    data['note'] = message
+                                    stats.add_unparsed(str(address), Exception(message))
+                                elif message == "Найден в исключениях":
+                                    data['note'] = message
+                                    stats.add_success()
+                                elif addr is None or key is None:
+                                    data['note'] = "Адрес не существует"
+                                    stats.add_unprocessed(str(address), Exception("Адрес не был распознан"))
+                                else:
+                                    stats.add_success()
+                                    
+                                dto = AddressDTO(**data)
+                            
+                            print(f"Обработка записи: raw={dto.raw}, key={dto.key}")
+                            yield dto
+                        except Exception as ex:
+                            stats.add_unparsed(str(address) if address is not None else "неизвестный адрес", ex)
+                            print(f"Ошибка при обработке строки: {ex}")
+                            continue
+            except Exception as e:
+                logger.write("Не удалось прочитать данные из БД.")
+                logger.write(str(e))
+                raise e
             
-    try:
         print(f"Создание ImprovedDatabaseOutputWorker с параметрами:")
         print(f"- input_table_name: {actual_table_name} (исходное: {input_table_name})")
         print(f"- output_table_name: {output_table_name}")
@@ -410,10 +415,6 @@ def process_db(dbms: str, user: str, password: str, host: str, port: str, db_nam
             logger=logger
         )
         outputWorker.save(generator())
-        
-        # Если по какой-то причине ImprovedDatabaseOutputWorker не сработал, можно раскомментировать старый вариант:
-        # outputWorker = DatabaseOutputWorker(engine, input_table_name, output_table_name, schema, id_column, logger)
-        # outputWorker.save(generator())
     except Exception as e:
         logger.write(f'Ошибка сохранения данных в БД. Подробнее :{e}')
         raise e
@@ -476,7 +477,7 @@ if __name__ == "__main__":
                     exceptions_manager=exceptions_manager
                 )
                 logger.write(stats.get_summary() + "\n")
-                if stats.failed > 0:
+                if stats.unprocessed > 0 or stats.unparsed > 0:
                     error_file = f"errors_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
                     stats.export_errors(error_file)
                     logger.write(f"Ошибки сохранены в файл: {error_file}\n")
